@@ -7,6 +7,7 @@ on:
     branches: ["master"]
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -36,7 +37,8 @@ jobs:
   publish:
     name: Publish to NPM
     needs: test
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+
     runs-on: ubuntu-latest
     permissions:
       contents: read
