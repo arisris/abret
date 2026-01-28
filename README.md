@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Abret Logo" width="200" />
+</p>
+
 # Abret
 
 [![npm version](https://img.shields.io/npm/v/abret?style=flat-square)](https://www.npmjs.com/package/abret)
