@@ -20,7 +20,10 @@ Use the `html` helper to return an `HTMLResponse`.
 ### Using JSX
 
 ```tsx
-import { html } from "abret";
+import { createAbret } from "abret";
+import { html } from "abret/html";
+
+const { createRoute } = createAbret();
 
 function App() {
   return <div>Hello World</div>;
@@ -71,9 +74,11 @@ function Page() {
 Similar to React, you can pass data through the component tree without props drilling.
 
 ```tsx
-import { createContext, useContext } from "abret";
+import { createContext, useContext } from "abret/store";
 
-const Theme = createContext("light");
+// Use default value if you want a Provider immediately
+// This returns a ContextWithProvider object
+const Theme = createContext("theme", "light");
 
 function Button() {
   const theme = useContext(Theme);

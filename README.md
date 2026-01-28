@@ -12,9 +12,18 @@
 - **🛡️ Type-Safe Routing**: Strict TypeScript inference for route parameters and handlers.
 - **🔗 Composable Middleware**: Robust middleware system with `createMiddleware` and `composeMiddlewares`.
 - **⚛️ JSX/TSX Support**: Server-side rendering with familiar JSX syntax (no Virtual DOM).
-- **🧩 Context API**: React-style `createContext` and `useContext` for component trees.
-- **⚡ Request Context**: `WeakMap`-based per-request storage for safe data passing.
+- **🧩 Unified Context**: Component and Request context unified into a single API using `AsyncLocalStorage`.
 - **🧠 Smart HTML Generation**: Automatic `<head>` management (titles, meta tags) and DOCTYPE handling.
+
+## ⚡ Benchmarks
+
+Abret's JSX engine is optimized for high-performance server-side rendering, avoiding the overhead of Virtual DOM.
+
+- **Simple Render**: ~800,000 ops/sec
+- **Complex Component Tree**: ~82,000 ops/sec
+- **VNode Creation**: ~2,200,000 ops/sec
+
+_Preliminary results on typical hardware. Significantly faster than standard React/Preact `renderToString`._
 
 ## 📦 Installation
 
@@ -27,7 +36,11 @@ bun add abret
 Create a simple server with routes and HTML rendering:
 
 ```tsx
-import { createRoute, mergeRoutes, html } from "abret";
+import { createAbret } from "abret";
+import { html } from "abret/html";
+
+// Initialize Abret
+const { createRoute, mergeRoutes } = createAbret();
 
 const home = createRoute("/", () => {
   return html`
@@ -59,9 +72,11 @@ Bun.serve({
 Organize your routes using `createRoute` and `createRouteGroup`. Types for parameters are automatically inferred.
 
 ```ts
-import { createRouteGroup, mergeRoutes } from "abret";
+import { createAbret } from "abret";
 
-// Create a group with a prefix and middleware
+const { createRouteGroup, mergeRoutes } = createAbret();
+
+// Create a group with a prefix
 const api = createRouteGroup("/api/v1");
 
 const routes = mergeRoutes(
@@ -75,50 +90,52 @@ const routes = mergeRoutes(
 Bun.serve({ routes });
 ```
 
-### Middleware
+### Middleware & Context
 
-Create reusable middleware for authentication, logging, and more.
+Create reusable middleware and share state across the request lifecycle using the unified Context API. Context is implicit and doesn't require passing `req` objects.
 
 ```ts
-import {
-  createMiddleware,
-  setContext,
-  createContextKey,
-  requireContext,
-} from "abret";
+import { createAbret } from "abret";
+import { createContext, setContext, useContext } from "abret/store";
+
+const { createRoute, createMiddleware } = createAbret();
 
 // Define a type-safe context key
-const UserContext = createContextKey<{ name: string }>("user");
+const UserContext = createContext<{ name: string }>("user");
 
 const authMiddleware = createMiddleware((req, server, next) => {
   const token = req.headers.get("Authorization");
   if (!token) return new Response("Unauthorized", { status: 401 });
 
-  // Store user in request context
-  setContext(req, UserContext, { name: "Alice" });
+  // Store user in context (implicit scope)
+  setContext(UserContext, { name: "Alice" });
   return next();
 });
 
 // Apply middleware to a route
 const dashboard = createRoute(
   "/dashboard",
-  (req) => {
-    // Safely retrieve context
-    const user = requireContext(req, UserContext);
+  () => {
+    // Safely retrieve context (no req needed)
+    const user = useContext(UserContext, { required: true });
     return new Response(`Welcome ${user.name}`);
   },
   authMiddleware,
 );
 ```
 
-### Components & Context
+### Components & JSX
 
 Build UI with components and share state using Context, just like in React (but on the server).
 
 ```tsx
-import { createContext, useContext, html } from "abret";
+import { createAbret } from "abret";
+import { html } from "abret/html";
+import { createContext, useContext } from "abret/store";
 
-const ThemeContext = createContext("light");
+const { createRoute } = createAbret();
+
+const ThemeContext = createContext("light"); // Default value
 
 function ThemeButton() {
   const theme = useContext(ThemeContext);
@@ -136,27 +153,51 @@ const page = createRoute("/component", () => {
 
 ## 🛠️ API Reference
 
-### Core
+### Core (`abret`)
+
+```ts
+import { createAbret } from "abret";
+const config = { trailingSlash: "both" }; // "both" | "strip" | "none"
+const {
+  createRoute,
+  createRouteGroup,
+  mergeRoutes,
+  createMiddleware,
+  composeMiddlewares,
+} = createAbret(config);
+```
 
 - `createRoute(path, handler, ...middlewares)`
 - `mergeRoutes(...routes)`
 - `createRouteGroup(prefix, middlewares)`
-
-### Middleware & Context
-
 - `createMiddleware(fn)`
 - `composeMiddlewares(...middlewares)`
-- `createContextKey(name)`
-- `setContext(req, key, value)`
-- `getContext(req, key)`
-- `requireContext(req, key)`
-- `hasContext(req, key)`
 
-### HTML & JSX
+### Context Store (`abret/store`)
+
+```ts
+import {
+  createContext,
+  useContext,
+  setContext,
+  hasContext,
+  clearContext,
+} from "abret/store";
+```
+
+- `createContext<T>(name, defaultValue?)` - Creates a context key (and Provider if default given).
+- `setContext(key, value)` - Sets value in current scope.
+- `useContext(key, options?)` - Gets value (or default).
+- `hasContext(key)` - Checks if set.
+- `clearContext(key)` - Clears value.
+
+### HTML & JSX (`abret/html`)
+
+```ts
+import { html, HTMLResponse } from "abret/html";
+```
 
 - `html(string | jsx)` - Creates an `HTMLResponse`.
-- `createContext(defaultValue)` - Creates a context provider/consumer.
-- `useContext(context)` - Consumes context value.
 - `HTMLResponse` - Extended Response with `.doctype()` and metadata handling.
 
 ## 📄 License

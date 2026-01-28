@@ -11,7 +11,9 @@ Use `createRoute` to define a single route. It supports:
 - Wildcards: `/catch/*`
 
 ```ts
-import { createRoute } from "abret";
+import { createAbret } from "abret";
+
+const { createRoute } = createAbret();
 
 // Simple handler
 const home = createRoute("/", () => new Response("Home"));
@@ -42,7 +44,9 @@ const api = createRoute("/api/resource", {
 `createRouteGroup` allows you to define a prefix and shared middleware for a set of routes.
 
 ```ts
-import { createRouteGroup, mergeRoutes } from "abret";
+import { createAbret } from "abret";
+
+const { createRouteGroup, mergeRoutes } = createAbret();
 
 const v1 = createRouteGroup("/v1", [authMiddleware]);
 

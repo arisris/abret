@@ -1,69 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { VNode, Fragment, type JSXNode, AsyncBuffer, SafeString } from "./jsx";
+import { getContextStore } from "./store";
+
 export { AsyncBuffer, SafeString, VNode, Fragment, type JSXNode };
-
-// Context API
-interface Context<T> {
-  defaultValue: T;
-  Provider: (props: { value: T; children: any }) => any;
-  id: symbol;
-}
-
-const contextStore = new AsyncLocalStorage<Map<symbol, any>>();
-
-/**
- * Creates a Context object to pass data through the component tree without having to pass props down manually at every level.
- *
- * Internally uses `AsyncLocalStorage` to ensure context isolation across concurrent requests in SSR.
- *
- * @example
- * ```tsx
- * const ThemeContext = createContext("light");
- *
- * function App() {
- *   return (
- *     <ThemeContext.Provider value="dark">
- *       <ThemedButton />
- *     </ThemeContext.Provider>
- *   );
- * }
- *
- * function ThemedButton() {
- *   const theme = useContext(ThemeContext);
- *   return <button class={theme}>I am styled!</button>;
- * }
- * ```
- */
-export function createContext<T>(defaultValue: T): Context<T> {
-  const id = Symbol("Context");
-  return {
-    defaultValue,
-    id,
-    Provider: function (props: { value: T; children: any }) {
-      return props.children;
-    },
-  };
-}
-
-/**
- * Retrieves the current value of a Context object.
- *
- * @param context - The Context object to retrieve the value from.
- * @returns The current value of the Context object.
- *
- * @example
- * ```tsx
- * const ThemeContext = createContext("light");
- * const theme = useContext(ThemeContext);
- * ```
- */
-export function useContext<T>(context: Context<T>): T {
-  const store = contextStore.getStore();
-  if (store && store.has(context.id)) {
-    return store.get(context.id);
-  }
-  return context.defaultValue;
-}
 
 /**
  * Helper to create HTML Response automatically
@@ -278,13 +216,14 @@ export function render(node: any): SafeString | Promise<SafeString> {
 
       // We can check if existing contexts map to this provider?
       // No, we need to know WHICH context this Provider belongs to.
-      // HACK: We attach the context object to the Provider function in createContext
+      // Check if this is a Provider component from createContext
       const providerCtx = (node.tag as any)._context as
-        | Context<any>
+        | { id: symbol; defaultValue: unknown }
         | undefined;
 
       if (providerCtx) {
         const value = node.props.value;
+        const contextStore = getContextStore();
         const currentStore = contextStore.getStore() || new Map();
         const newStore = new Map(currentStore);
         newStore.set(providerCtx.id, value);
@@ -484,12 +423,3 @@ function processMetadata(html: string): string {
 
   return extractedHtml;
 }
-
-// Ensure context is linked
-// We need to modify createContext to assign _context to Provider
-const originalCreateContext = createContext;
-(createContext as any) = function <T>(defaultValue: T): Context<T> {
-  const ctx = originalCreateContext(defaultValue);
-  (ctx.Provider as any)._context = ctx;
-  return ctx;
-};

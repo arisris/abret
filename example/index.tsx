@@ -1,29 +1,32 @@
+import { createAbret } from "abret";
+import { html } from "abret/html";
 import {
+  createContext,
+  useContext,
+  setContext,
+  type Context,
+} from "abret/store";
+
+// Initialize Abret
+const {
   createRoute,
   mergeRoutes,
   createRouteGroup,
-  html,
   createMiddleware,
   composeMiddlewares,
-  createContext,
-  useContext,
-  createContextKey,
-  setContext,
-  requireContext,
-  type Middleware,
-} from "abret";
+} = createAbret();
 
 // ============================================================================
 // 1. Setup Context & Middleware
 // ============================================================================
 
 // Type-safe context key for user data
-const CurrentUserContext = createContextKey<{ name: string; role: string }>(
+const CurrentUserContext = createContext<{ name: string; role: string }>(
   "currentUser",
 );
 
 // Middleware: Logger
-const logger: Middleware = (req, server, next) => {
+const logger = createMiddleware((req, server, next) => {
   const start = performance.now();
   console.log(`[${req.method}] ${req.url}`);
   const res = next();
@@ -40,31 +43,35 @@ const logger: Middleware = (req, server, next) => {
   const duration = (performance.now() - start).toFixed(2);
   console.log(`  -> ${res.status} (${duration}ms)`);
   return res;
-};
+});
 
 // Middleware: Fake Auth (adds user to context)
-const auth: Middleware = (req, server, next) => {
+const auth = createMiddleware((req, server, next) => {
   const url = new URL(req.url);
   // Simulating auth via query param ?user=name for demo
   const userParam = url.searchParams.get("user") || "Guest";
 
-  setContext(req, CurrentUserContext, {
+  // Set context (no req needed)
+  setContext(CurrentUserContext, {
     name: userParam,
     role: userParam === "Admin" ? "admin" : "user",
   });
 
   return next();
-};
+});
 
 // ============================================================================
 // 2. Components
 // ============================================================================
 
-const ThemeContext = createContext("light");
+const ThemeContext = createContext("Theme", "light");
 
 function Layout(props: { title: string; children: any }) {
   // We can use context here if we wrapped it in a provider
   const theme = useContext(ThemeContext);
+
+  // We can also access UserContext directly in components now!
+  const user = useContext(CurrentUserContext);
 
   return (
     <html lang="en">
@@ -90,6 +97,11 @@ function Layout(props: { title: string; children: any }) {
           <a href="/about">About</a>
           <a href="/api/me">API (Me)</a>
           <a href="/?user=Admin">Login as Admin</a>
+          {user ? (
+            <span>
+              Logged in as: <strong>{user.name}</strong>
+            </span>
+          ) : null}
         </nav>
         <main>{props.children}</main>
         <footer>
@@ -103,17 +115,12 @@ function Layout(props: { title: string; children: any }) {
 }
 
 function UserBadge() {
-  // Access request context implicitly via closure?
-  // No, request context is request-scoped. Components render during request.
-  // But components in 'abret' don't have direct access to 'req' object unless passed.
-  // However, we can pass data down or use component-level context.
+  // Access data implicitly from storage!
+  const user = useContext(CurrentUserContext);
 
-  // For 'req' specific data, we usually pass it as props in this architecture,
-  // OR we could use AsyncLocalStorage for request context if we wanted global access,
-  // but 'abret' uses WeakMap on 'req' object.
-  // So we must pass user as prop to components or use Component Context if we had a Provider.
+  if (!user) return null;
 
-  return <span>(Component Level)</span>;
+  return <span>(Component Level: {user.name})</span>;
 }
 
 // ============================================================================
@@ -126,8 +133,9 @@ const appMiddleware = composeMiddlewares(logger, auth);
 // -- Home Route --
 const home = createRoute(
   "/",
-  (req) => {
-    const user = requireContext(req, CurrentUserContext);
+  () => {
+    // Get context (no req needed)
+    const user = useContext(CurrentUserContext, { required: true });
 
     return html(
       <Layout title="Home">
@@ -140,6 +148,9 @@ const home = createRoute(
           <h3>User Status</h3>
           <p>
             Role: <span class="badge">{user.role}</span>
+          </p>
+          <p>
+            <UserBadge />
           </p>
         </div>
 
@@ -180,8 +191,8 @@ const about = createRoute(
 const api = createRouteGroup("/api", [appMiddleware]);
 
 const apiRoutes = mergeRoutes(
-  api("/me", (req) => {
-    const user = requireContext(req, CurrentUserContext);
+  api("/me", () => {
+    const user = useContext(CurrentUserContext, { required: true });
     return Response.json(user);
   }),
 

@@ -1,5 +1,23 @@
 # API Reference
 
+## Core Factory
+
+### `createAbret(config)`
+
+Initializes the Abret library and returns the core functions.
+
+```ts
+const {
+  createRoute,
+  createRouteGroup,
+  mergeRoutes,
+  createMiddleware,
+  composeMiddlewares,
+} = createAbret({ trailingSlash: "both" });
+```
+
+- **config.trailingSlash**: `"both" | "strip" | "none"` (default: `"both"`).
+
 ## Routing
 
 ### `createRoute(path, handler, ...middleware)`
@@ -37,27 +55,29 @@ Combines multiple middlewares into a single one.
 
 ---
 
-## Request Context
+## Context API (`abret/store`)
 
-### `createContextKey<T>(name)`
+### `createContext<T>(name, defaultValue?)`
 
-Creates a unique symbol key for context storage.
+Creates a context key. If a `defaultValue` is provided, it returns a `ContextWithProvider` which includes a `.Provider` component.
 
-### `setContext(req, key, value)`
+### `setContext(key, value)`
 
-Stores a value in the request context.
+Stores a value in the current context scope.
 
-### `getContext(req, key)`
+### `useContext(key, options?)`
 
-Retrieves a value (returns `T | undefined`).
+Retrieves a value.
 
-### `requireContext(req, key)`
+- **options.required**: If `true`, throws error if context is missing.
 
-Retrieves a value or throws if missing.
+### `hasContext(key)`
+
+Returns `true` if context is set.
 
 ---
 
-## HTML & JSX
+## HTML & JSX (`abret/html`)
 
 ### `html(content, init?)`
 
@@ -71,10 +91,6 @@ Creates an `HTMLResponse`.
 - `.doctype(raw?)`: Prepend `<!DOCTYPE html>`.
 - `.init(options)`: Update response options.
 
-### `createContext(defaultValue)`
+### `HTMLResponse`
 
-Creates a Component Context (Provider/Consumer).
-
-### `useContext(context)`
-
-Hook to consume Component Context value.
+Extended Response class with metadata management features.

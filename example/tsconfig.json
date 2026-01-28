@@ -12,5 +12,8 @@
     },
     "jsx": "react-jsx",
     "jsxImportSource": "abret/jsx"
-  }
+  },
+  "include": [
+    "."
+  ]
 }

@@ -1,78 +1,34 @@
-# Middleware & Context
+## Context API (`abret/store`)
 
-Abret provides a functional middleware system and a request-scoped context API.
+Abret uses `AsyncLocalStorage` to provide a unified context for both request-scoped data and component tree data.
 
-## Middleware
+### Creating Context
 
-Middleware functions intercept requests before they reach the handler. They can modify the request, execute code (logging), or block the request (auth).
-
-### Creating Middleware
-
-Use `createMiddleware` to define a middleware function.
+First, define a typed Context.
 
 ```ts
-import { createMiddleware } from "abret";
-
-const logger = createMiddleware((req, server, next) => {
-  console.log(`${req.method} ${req.url}`);
-  return next();
-});
-```
-
-### Composing Middleware
-
-You can combine multiple middlewares using `composeMiddlewares`.
-
-```ts
-import { composeMiddlewares } from "abret";
-
-const stack = composeMiddlewares(logger, securityHeaders, auth);
-```
-
-### Applying to Routes
-
-Pass middleware as the last arguments to `createRoute` or `createRouteGroup`.
-
-```ts
-// On a single route
-createRoute("/admin", handler, authMiddleware);
-
-// On a group
-createRouteGroup("/api", [logger, authMiddleware]);
-```
-
----
-
-## Context API
-
-Abret uses a `WeakMap`-based storage to attach data to the `Request` object safely, without polluting the standard Request properties.
-
-### Typed Keys
-
-First, define a typed Key.
-
-```ts
-import { createContextKey } from "abret";
+import { createContext } from "abret/store";
 
 interface User {
   id: string;
   role: "admin" | "user";
 }
 
-export const UserContext = createContextKey<User>("user");
+export const UserContext = createContext<User>("user");
 ```
 
 ### Setting Context
 
-Set values inside middleware.
+Set values inside middleware. No need to pass the `req` object.
 
 ```ts
-import { setContext } from "abret";
+import { setContext } from "abret/store";
+import { UserContext } from "./context";
 
 const auth = createMiddleware((req, server, next) => {
   const user = authenticate(req);
   if (user) {
-    setContext(req, UserContext, user);
+    setContext(UserContext, user);
   }
   return next();
 });
@@ -83,11 +39,12 @@ const auth = createMiddleware((req, server, next) => {
 Retrieve values inside your route handlers.
 
 ```ts
-import { requireContext } from "abret";
+import { useContext } from "abret/store";
+import { UserContext } from "./context";
 
-const profile = createRoute("/me", (req) => {
+const profile = createRoute("/me", () => {
   // Throws if context is missing
-  const user = requireContext(req, UserContext);
+  const user = useContext(UserContext, { required: true });
   return Response.json(user);
 });
 ```

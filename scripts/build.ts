@@ -7,6 +7,8 @@ console.log("📦  Bundling with Bun...");
 const buildResult = await Bun.build({
   entrypoints: [
     "./src/index.ts",
+    "./src/store.ts",
+    "./src/html.ts",
     "./src/jsx/jsx-runtime.ts",
     "./src/jsx/jsx-dev-runtime.ts",
   ],
