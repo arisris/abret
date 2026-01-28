@@ -43,6 +43,10 @@
     "./jsx-dev-runtime": {
       "types": "./dist/jsx/jsx-dev-runtime.d.ts",
       "import": "./dist/jsx/jsx-dev-runtime.js"
+    },
+    "./middleware/static": {
+      "types": "./dist/middleware/static/index.d.ts",
+      "import": "./dist/middleware/static/index.js"
     }
   },
   "scripts": {

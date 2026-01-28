@@ -86,7 +86,10 @@ export namespace JSX {
   export type Element = VNode | SafeString | AsyncBuffer | Promise<SafeString>;
   export type ElementType = string | ((props: any) => JSXNode);
   export interface IntrinsicElements {
-    [elemName: string]: any;
+    [elemName: string]: {
+      dangerouslySetInnerHTML?: { __html: string };
+      [key: string]: any;
+    };
   }
   export interface ElementChildrenAttribute {
     children: {};

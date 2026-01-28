@@ -105,5 +105,54 @@ async function UserProfile({ id }) {
 }
 
 // Automatically awaited during render
+// Automatically awaited during render
 html(<UserProfile id="1" />);
 ```
+
+## Raw HTML & dangerouslySetInnerHTML
+
+You can inject raw HTML strings using either the `raw` helper or the `dangerouslySetInnerHTML` prop.
+
+### Using `raw` Helper
+
+```tsx
+import { raw } from "abret/html";
+
+// In JSX
+return <div>{raw("<span>Raw Content</span>")}</div>;
+
+// In Template Literals
+return html`<div>${raw("<strong>Bold</strong>")}</div>`;
+```
+
+### Using `dangerouslySetInnerHTML`
+
+Compatible with React patterns:
+
+```tsx
+<div dangerouslySetInnerHTML={{ __html: "<p>Legacy Content</p>" }} />
+```
+
+## Components in Template Literals
+
+You can render components directly within `html` template literals, which is useful if you prefer not to use a build step for JSX.
+
+```tsx
+function Button({ label }) {
+  return html`<button>${label}</button>`;
+}
+
+// Function Component
+const view = html`
+  <div>
+    <${Button} label="Click Me" />
+  </div>
+`;
+```
+
+Supported features:
+
+- **Dynamic Props**: `<${Component} count=${count} />`
+- **Spread Props**: `<${Component} ...${props} />`
+- **Children**: `<${Wrapper}>Content<//>` (using `<//>` to close)
+- **Self-Closing**: `<${Component} />`

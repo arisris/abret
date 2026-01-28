@@ -199,6 +199,7 @@ import { html, HTMLResponse } from "abret/html";
 
 - `html(string | jsx)` - Creates an `HTMLResponse`.
 - `HTMLResponse` - Extended Response with `.doctype()` and metadata handling.
+- `raw(string)` - Creates safe unescaped HTML content.
 
 ## 📄 License
 

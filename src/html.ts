@@ -74,13 +74,13 @@ export class HTMLResponse extends Response {
     let newBodySource: any;
 
     if (this._bodySource instanceof SafeString) {
-      newBodySource = new SafeString(prefix + this._bodySource.toString());
+      newBodySource = raw(prefix + this._bodySource.toString());
     } else if (
       this._bodySource instanceof Promise ||
       this._bodySource instanceof AsyncBuffer
     ) {
       newBodySource = (this._bodySource as Promise<SafeString>).then(
-        (content) => new SafeString(prefix + content.toString()),
+        (content) => raw(prefix + content.toString()),
       );
     } else {
       // Fallback for VNode or other
@@ -119,51 +119,239 @@ export class HTMLResponse extends Response {
  * return html(<ErrorPage />, { status: 500 });
  * ```
  */
+// -------------------------------------------------------------------------
+// HTM-like Parser Constants
+// -------------------------------------------------------------------------
+const MODE_TEXT = 0;
+const MODE_TAGNAME = 1;
+const MODE_WHITESPACE = 2;
+const MODE_PROPNAME = 3;
+const MODE_PROPVAL = 4;
+const MODE_PROPVAL_QUOTE = 5;
+const MODE_CLOSE_TAG = 6;
+
+/**
+ * Creates an implementation of `HTMLResponse`.
+ */
 export function html(
   bodyOrStrings: JSXNode | TemplateStringsArray,
   ...args: any[]
 ): HTMLResponse {
-  let body: SafeString | AsyncBuffer | Promise<SafeString>;
-
-  // Check if used as Tagged Template
   if (Array.isArray(bodyOrStrings) && (bodyOrStrings as any).raw) {
-    const strings = bodyOrStrings as unknown as TemplateStringsArray;
-    const values = args;
-
-    // We treat template parts as raw strings and values as potential VNodes
-    const inputForRender = strings.reduce((acc: any[], str, i) => {
-      if (str) acc.push(new SafeString(str));
-      if (i < values.length) {
-        acc.push(values[i]);
-      }
-      return acc;
-    }, []);
-
-    // Render and then process metadata
-    const rendered = render(inputForRender);
+    const vnode = parse(bodyOrStrings as unknown as TemplateStringsArray, args);
+    // Render the tree
+    const rendered = render(vnode);
     if (rendered instanceof Promise) {
-      body = rendered.then(
-        (r) => new SafeString(processMetadata(r.toString())),
+      return new HTMLResponse(
+        rendered.then((s) => raw(processMetadata(s.toString()))),
       );
-    } else {
-      body = new SafeString(processMetadata(rendered.toString()));
     }
-  } else {
-    // direct usage: html(<App />)
-    const rendered = render(bodyOrStrings as JSXNode);
-    if (rendered instanceof Promise) {
-      body = rendered.then(
-        (r) => new SafeString(processMetadata(r.toString())),
-      );
-    } else {
-      body = new SafeString(processMetadata(rendered.toString()));
+    return new HTMLResponse(raw(processMetadata(rendered.toString())));
+  }
+
+  // Direct usage
+  const rendered = render(bodyOrStrings as JSXNode);
+  if (rendered instanceof Promise) {
+    return new HTMLResponse(
+      rendered.then((s) => raw(processMetadata(s.toString()))),
+    );
+  }
+  return new HTMLResponse(raw(processMetadata(rendered.toString())));
+}
+
+// Compact HTM parser
+function parse(statics: TemplateStringsArray, fields: any[]): any {
+  let mode = MODE_TEXT;
+  let buffer = "";
+  let quote = "";
+  let char = "";
+  let propName: any;
+
+  // We store the tree as nested arrays matching the `current` structure
+  // Then map it to VNodes at the end.
+  // [tag, props, children] but using { tag, props, children } is clearer here
+  // Root virtual node
+  const root: any = { children: [] };
+  let active = root;
+  const stack: any[] = [active];
+
+  for (let i = 0; i < statics.length; i++) {
+    if (i) {
+      if (mode === MODE_TEXT) {
+        commit();
+        active.children.push(fields[i - 1]);
+      } else if (mode === MODE_TAGNAME) {
+        commit();
+        // Dynamic Tag Name: <${Component}
+        const tag = fields[i - 1];
+        active = openTag(stack, active, tag);
+        mode = MODE_WHITESPACE;
+      } else if (mode === MODE_WHITESPACE) {
+        // <div ...${props}> or <div ${bool}>
+        const val = fields[i - 1];
+        if (buffer === "...") {
+          Object.assign(active.props, val); // spread
+          buffer = "";
+        } else {
+          // Treat as boolean attribute with implicit name?
+          // For simplicity, we ignore value-only fields in whitespace unless it is spread.
+        }
+      } else if (mode === MODE_PROPNAME) {
+        // <div ${propName}=...>
+        propName = fields[i - 1];
+        mode = MODE_PROPVAL;
+      } else if (mode === MODE_PROPVAL) {
+        // <div id=${val}>
+        active.props[propName] = fields[i - 1];
+        mode = MODE_WHITESPACE;
+      } else if (mode === MODE_PROPVAL_QUOTE) {
+        // <div id="...${val}... "
+        buffer += fields[i - 1]; // Stringify
+      }
+    }
+
+    const chunk = statics[i];
+    if (!chunk) continue;
+    for (let j = 0; j < chunk.length; j++) {
+      char = chunk[j]!;
+
+      if (mode === MODE_TEXT) {
+        if (char === "<") {
+          commit();
+          mode = MODE_TAGNAME;
+        } else {
+          buffer += char;
+        }
+      } else if (mode === MODE_TAGNAME) {
+        if (char === "/" && !buffer) {
+          // </ close
+          mode = MODE_CLOSE_TAG;
+        } else if (char === ">" || char === "/" || /\s/.test(char)) {
+          // End of tag name
+          if (buffer) {
+            // Static tag name
+            active = openTag(stack, active, buffer);
+          }
+          if (char === ">") mode = MODE_TEXT;
+          else if (char === "/") {
+            // Self closing <div />
+            if (stack.length > 1) {
+              closeTag(stack);
+              active = stack[stack.length - 1];
+            }
+          } else mode = MODE_WHITESPACE;
+
+          buffer = "";
+        } else {
+          buffer += char;
+        }
+      } else if (mode === MODE_CLOSE_TAG) {
+        if (char === ">") {
+          closeTag(stack);
+          active = stack[stack.length - 1];
+          mode = MODE_TEXT;
+          buffer = "";
+        }
+      } else if (mode === MODE_WHITESPACE) {
+        if (char === "/") {
+          // Self close
+          closeTag(stack);
+          active = stack[stack.length - 1];
+        } else if (char === ">") {
+          mode = MODE_TEXT;
+        } else if (!/\s/.test(char)) {
+          mode = MODE_PROPNAME;
+          buffer = char;
+        }
+      } else if (mode === MODE_PROPNAME) {
+        if (char === "=") {
+          propName = buffer;
+          buffer = "";
+          mode = MODE_PROPVAL;
+        } else if (char === ">") {
+          // Boolean <div prop>
+          active.props[buffer] = true;
+          mode = MODE_TEXT;
+          buffer = "";
+        } else if (/\s/.test(char)) {
+          active.props[buffer] = true;
+          mode = MODE_WHITESPACE;
+          buffer = "";
+        } else {
+          buffer += char;
+        }
+      } else if (mode === MODE_PROPVAL) {
+        if (char === '"' || char === "'") {
+          quote = char;
+          mode = MODE_PROPVAL_QUOTE;
+        } else if (char === ">") {
+          // <div prop=val>
+          active.props[propName] = buffer;
+          mode = MODE_TEXT;
+          buffer = "";
+        } else if (/\s/.test(char)) {
+          active.props[propName] = buffer;
+          mode = MODE_WHITESPACE;
+          buffer = "";
+        } else {
+          buffer += char;
+        }
+      } else if (mode === MODE_PROPVAL_QUOTE) {
+        if (char === quote) {
+          active.props[propName] = buffer;
+          mode = MODE_WHITESPACE;
+          buffer = "";
+        } else {
+          buffer += char;
+        }
+      }
     }
   }
 
-  const init = args[0] as ResponseInit;
-  if (init && !(bodyOrStrings as any).raw) return new HTMLResponse(body, init);
+  if (mode === MODE_TEXT) commit();
 
-  return new HTMLResponse(body);
+  // Helper
+  function commit() {
+    if (buffer) {
+      if (mode === MODE_TEXT) {
+        active.children.push(raw(buffer)); // Text node
+      }
+      buffer = "";
+    }
+  }
+
+  function openTag(stack: any[], current: any, tag: any) {
+    const newNode = { tag, props: {}, children: [] };
+    current.children.push(newNode); // Add as child
+    stack.push(newNode);
+    return newNode;
+  }
+  function closeTag(stack: any[]) {
+    // Basic pop, robust parsers might verify tag name matched
+    if (stack.length > 1) stack.pop();
+  }
+
+  // Root children
+  if (root.children.length === 1) return toVNode(root.children[0]);
+  return root.children.map(toVNode);
+}
+
+function toVNode(node: any): any {
+  if (node === null || node === undefined) return node;
+  if (node instanceof SafeString || typeof node !== "object") return node;
+  if (node instanceof Promise || node instanceof AsyncBuffer) return node;
+  if (node instanceof VNode) return node;
+
+  if (Array.isArray(node)) return node.map(toVNode);
+
+  // If it's not an internal parser node (missing children array), return as is
+  if (!node.children || !Array.isArray(node.children)) {
+    return node;
+  }
+
+  const children = node.children.map(toVNode);
+  const props = { ...node.props, children };
+  return new VNode(node.tag, props, children);
 }
 
 // -------------------------------------------------------------------------
@@ -185,11 +373,11 @@ export function render(node: any): SafeString | Promise<SafeString> {
     return render((node as any)._bodySource);
   }
   if (node === null || node === undefined || typeof node === "boolean") {
-    return new SafeString("");
+    return raw("");
   }
   if (node instanceof SafeString) return node;
   if (typeof node === "number" || typeof node === "bigint")
-    return new SafeString(String(node));
+    return raw(String(node));
   if (node instanceof Promise || node instanceof AsyncBuffer) {
     return node.then(render);
   }
@@ -197,13 +385,11 @@ export function render(node: any): SafeString | Promise<SafeString> {
   if (Array.isArray(node)) {
     const results = node.map(render);
     if (results.some((r) => r instanceof Promise)) {
-      return Promise.all(results).then(
-        (parts) => new SafeString(parts.map((p) => p.toString()).join("")),
+      return Promise.all(results).then((parts) =>
+        raw(parts.map((p) => p.toString()).join("")),
       );
     }
-    return new SafeString(
-      (results as SafeString[]).map((r) => r.toString()).join(""),
-    );
+    return raw((results as SafeString[]).map((r) => r.toString()).join(""));
   }
 
   if (node instanceof VNode) {
@@ -239,7 +425,7 @@ export function render(node: any): SafeString | Promise<SafeString> {
         result = node.tag(node.props);
       } catch (e) {
         console.error("Error rendering component", e);
-        return new SafeString("");
+        return raw("");
       }
       // Use handleResult logic implicitly by recursion
       return render(result);
@@ -253,7 +439,7 @@ export function render(node: any): SafeString | Promise<SafeString> {
     // Handle Intrinsic (String tag)
     if (typeof node.tag === "string") {
       const tag = node.tag;
-      const { children, ...rest } = node.props;
+      const { children, dangerouslySetInnerHTML, ...rest } = node.props;
 
       const attrs = Object.entries(rest)
         .map(([key, value]) => {
@@ -267,28 +453,34 @@ export function render(node: any): SafeString | Promise<SafeString> {
         .join("");
 
       if (VOID_TAGS.has(tag)) {
-        return new SafeString(`<${tag}${attrs} />`);
+        return raw(`<${tag}${attrs} />`);
+      }
+
+      // Handle dangerouslySetInnerHTML
+      if (dangerouslySetInnerHTML && dangerouslySetInnerHTML.__html) {
+        return raw(
+          `<${tag}${attrs}>${dangerouslySetInnerHTML.__html}</${tag}>`,
+        );
       }
 
       // children can be array or single
       const childrenList = Array.isArray(children) ? children : [children];
 
-      // Use Array map to render children so we can detect promises
       const renderedChildrenResult = render(childrenList);
 
       if (renderedChildrenResult instanceof Promise) {
-        return renderedChildrenResult.then(
-          (c) => new SafeString(`<${tag}${attrs}>${c.toString()}</${tag}>`),
+        return renderedChildrenResult.then((c) =>
+          raw(`<${tag}${attrs}>${c.toString()}</${tag}>`),
         );
       }
-      return new SafeString(
+      return raw(
         `<${tag}${attrs}>${renderedChildrenResult.toString()}</${tag}>`,
       );
     }
   }
 
   // Fallback
-  return new SafeString(escapeHtml(String(node)));
+  return raw(escapeHtml(String(node)));
 }
 
 // -------------------------------------------------------------------------
@@ -422,4 +614,20 @@ function processMetadata(html: string): string {
   }
 
   return extractedHtml;
+}
+
+/**
+ * Creates a raw HTML string that will not be escaped when rendered.
+ * Equivalent to using `new SafeString(str)`.
+ *
+ * @param str - The raw HTML string.
+ * @returns A SafeString instance.
+ *
+ * @example
+ * ```tsx
+ * <div>{raw("<span>Raw HTML</span>")}</div>
+ * ```
+ */
+export function raw(str: string): SafeString {
+  return new SafeString(str);
 }

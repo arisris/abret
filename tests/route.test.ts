@@ -847,22 +847,24 @@ describe("createAbret", () => {
   });
 
   describe('trailingSlash: "strip"', () => {
-    test("creates only path without trailing slash", () => {
+    test("creates canonical path and redirect handler", () => {
       const { createRoute } = createAbret({ trailingSlash: "strip" });
 
       const route = createRoute("/hello", () => new Response("Hello"));
 
       expect(route).toHaveProperty("/hello");
-      expect(Object.keys(route).length).toBe(1);
+      expect(route).toHaveProperty("/hello/");
+      expect(Object.keys(route).length).toBe(2);
     });
 
-    test("strips trailing slash from defined path", () => {
+    test("strips trailing slash from defined path and adds redirect", () => {
       const { createRoute } = createAbret({ trailingSlash: "strip" });
 
       const route = createRoute("/hello/", () => new Response("Hello"));
 
       expect(route).toHaveProperty("/hello");
-      expect(Object.keys(route).length).toBe(1);
+      expect(route).toHaveProperty("/hello/");
+      expect(Object.keys(route).length).toBe(2);
     });
 
     test("works with route groups", () => {
@@ -874,15 +876,17 @@ describe("createAbret", () => {
       const route = api("/users/", () => Response.json([]));
 
       expect(route).toHaveProperty("/api/users");
-      expect(Object.keys(route).length).toBe(1);
+      expect(route).toHaveProperty("/api/users/");
+      expect(Object.keys(route).length).toBe(2);
 
       // Ensure createRoute from same instance also uses strip mode
       const directRoute = createRoute("/test/", () => new Response("Test"));
       expect(directRoute).toHaveProperty("/test");
-      expect(Object.keys(directRoute).length).toBe(1);
+      expect(directRoute).toHaveProperty("/test/");
+      expect(Object.keys(directRoute).length).toBe(2);
     });
 
-    test("works with real server - only non-slash routes work", async () => {
+    test("works with real server - redirects slash routes", async () => {
       const { createRoute, mergeRoutes } = createAbret({
         trailingSlash: "strip",
       });
@@ -905,9 +909,14 @@ describe("createAbret", () => {
         const res1 = await fetch(`${server.url}api/hello`);
         expect(await res1.text()).toBe("Hello API");
 
-        // With trailing slash should 404
-        const res2 = await fetch(`${server.url}api/hello/`);
-        expect(res2.status).toBe(404);
+        // With trailing slash should redirect
+        const res2 = await fetch(`${server.url}api/hello/`, {
+          redirect: "manual",
+        });
+        expect(res2.status).toBe(308);
+        const location = res2.headers.get("Location");
+        expect(location).toBeTruthy();
+        expect(location!.endsWith("/api/hello")).toBe(true);
       } finally {
         server.stop();
       }
@@ -1027,12 +1036,13 @@ describe("createAbret", () => {
       );
 
       expect(Object.keys(bothRoute).length).toBe(2);
-      expect(Object.keys(stripRoute).length).toBe(1);
+      expect(Object.keys(stripRoute).length).toBe(2);
       expect(Object.keys(noneRoute).length).toBe(1);
 
       expect(bothRoute).toHaveProperty("/test");
       expect(bothRoute).toHaveProperty("/test/");
       expect(stripRoute).toHaveProperty("/test");
+      expect(stripRoute).toHaveProperty("/test/");
       expect(noneRoute).toHaveProperty("/test");
     });
   });

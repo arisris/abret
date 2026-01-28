@@ -1,3 +1,4 @@
+/** @jsxImportSource abret/jsx */
 import { createAbret } from "abret";
 import { html } from "abret/html";
 import {
@@ -14,7 +15,7 @@ const {
   createRouteGroup,
   createMiddleware,
   composeMiddlewares,
-} = createAbret();
+} = createAbret({ trailingSlash: "strip" });
 
 // ============================================================================
 // 1. Setup Context & Middleware

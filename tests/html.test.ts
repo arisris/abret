@@ -7,6 +7,7 @@ import {
   HTMLResponse,
   type JSXNode,
   render as renderHTML,
+  raw,
 } from "../src/html";
 import { jsx } from "../src/jsx";
 
@@ -356,5 +357,67 @@ describe("html Helper & Metadata System", () => {
 
     const text = await res.text();
     expect(text).toContain("<li>A</li><li>B</li><li>C</li>");
+  });
+  test("handles components in template literals", async () => {
+    const Component = ({ name }: { name: string }) =>
+      html`<div>Hello ${name}</div>`;
+    const res = html`<${Component} name="World" />`;
+    const text = await res.text();
+    expect(text).toBe("<div>Hello World</div>");
+  });
+
+  test("handles nested components and children", async () => {
+    const Wrapper = ({ children }: any) =>
+      html`<div class="wrap">${children}</div>`;
+    const Content = () => html`<span>Content</span>`;
+
+    const res = html`<${Wrapper}><${Content} /></${Wrapper}>`;
+    const text = await res.text();
+    expect(text).toBe('<div class="wrap"><span>Content</span></div>');
+  });
+
+  test("handles props with values", async () => {
+    const Box = ({ id, active }: any) =>
+      html`<div id=${id} class=${active ? "on" : "off"}></div>`;
+
+    const res = html`<${Box} id="b1" active=${true} />`;
+    const text = await res.text();
+    expect(text).toBe('<div id="b1" class="on"></div>');
+  });
+
+  test("handles <//> closing tag", async () => {
+    const Container = ({ children }: any) =>
+      html`<section>${children}</section>`;
+
+    // <//> should close Container
+    const res = html`<${Container}>Inner<//>`;
+    const text = await res.text();
+    expect(text).toBe("<section>Inner</section>");
+  });
+  test("handles self-closing (void) dynamic components", async () => {
+    const VoidComp = ({ id }: any) => html`<div id=${id} />`;
+
+    // Case 1: With space <${Comp} />
+    const res1 = html`<${VoidComp} id="1" />`;
+    expect(await res1.text()).toBe('<div id="1"></div>');
+
+    // Case 2: Without space <${Comp}/>
+    const res2 = html`<${VoidComp} id="2" />`;
+    expect(await res2.text()).toBe('<div id="2"></div>');
+  });
+  test("handles dangerouslySetInnerHTML", async () => {
+    const raw = "<span>Raw</span>";
+    // JSX style
+    const node = jsx("div", { dangerouslySetInnerHTML: { __html: raw } });
+    expect(await render(node)).toBe("<div><span>Raw</span></div>");
+  });
+  test("handles raw helper", async () => {
+    const rawHTML = raw("<span>Raw Helper</span>");
+    const node = jsx("div", { children: rawHTML });
+    // also jsx with template literal usage
+    const res = html`<div>${raw("<strong>Bold</strong>")}</div>`;
+
+    expect(await render(node)).toBe("<div><span>Raw Helper</span></div>");
+    expect(await res.text()).toBe("<div><strong>Bold</strong></div>");
   });
 });

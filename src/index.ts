@@ -10,7 +10,7 @@ import { runWithContext as _runWithContext } from "./store";
 /**
  * Trailing slash handling mode:
  * - "both": Register both `/path` and `/path/` variants (default)
- * - "strip": Normalize to `/path` only (remove trailing slash)
+ * - "strip": Normalize to `/path` and redirect `/path/` to `/path`
  * - "none": No automatic handling, use exact paths as defined
  */
 export type TrailingSlashMode = "both" | "strip" | "none";
@@ -239,12 +239,32 @@ const makeCreateRoute = (trailingSlash: TrailingSlashMode = "both") => {
     ...middlewares: Middleware<P, S>[]
   ): { [K in PathWithVariants<P>]: RouteValue<P, S> } => {
     const wrappedValue = wrapRouteValue(value, middlewares);
-    const variants = normalizePathVariants(path, trailingSlash);
-
-    // Build route object with all variants
     const routes: Record<string, RouteValue<P, S>> = {};
-    for (const variant of variants) {
-      routes[variant] = wrappedValue;
+
+    // Special handling for root path - no variants
+    if (path === "/" || path === "") {
+      routes["/"] = wrappedValue;
+      return routes as { [K in PathWithVariants<P>]: RouteValue<P, S> };
+    }
+
+    if (trailingSlash === "strip") {
+      const withoutSlash = path.endsWith("/") ? path.slice(0, -1) : path;
+      const withSlash = `${withoutSlash}/`;
+
+      routes[withoutSlash] = wrappedValue;
+      // Add redirect for trailing slash variant
+      routes[withSlash] = ((req) => {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/")) {
+          url.pathname = url.pathname.slice(0, -1);
+        }
+        return Response.redirect(url.toString(), 308);
+      }) as Bun.Serve.Handler<Bun.BunRequest<P>, Bun.Server<S>, Response>;
+    } else {
+      const variants = normalizePathVariants(path, trailingSlash);
+      for (const variant of variants) {
+        routes[variant] = wrappedValue;
+      }
     }
 
     return routes as { [K in PathWithVariants<P>]: RouteValue<P, S> };
