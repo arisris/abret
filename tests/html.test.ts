@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  VNode,
   Fragment,
-  SafeString,
-  html,
   HTMLResponse,
-  type JSXNode,
-  render as renderHTML,
+  html,
   raw,
+  render as renderHTML,
+  SafeString,
+  type VNode,
 } from "../src/html";
 import { jsx } from "../src/jsx";
 

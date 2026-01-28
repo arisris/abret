@@ -51,7 +51,7 @@ export interface ContextWithProvider<T> {
  * const ThemeContext = createContext("theme", "light");
  *
  * // In middleware - set context (no req parameter needed!)
- * const authMiddleware = createMiddleware(async (req, server, next) => {
+ * const authMiddleware = createMiddleware(() => async (req, _server, next) => {
  *   const user = await validateToken(req.headers.get("Authorization"));
  *   setContext(UserContext, user);
  *   return next();
@@ -77,12 +77,13 @@ export function createContext<T>(
 ): ContextWithProvider<T>;
 export function createContext<T>(
   name: string,
-  defaultValue?: T,
+  ...args: [defaultValue: T] | []
 ): Context<T> | ContextWithProvider<T> {
+  const [defaultValue] = args;
   const id = Symbol(name) as Context<T>;
 
   // If default value provided, return context with Provider
-  if (arguments.length >= 2) {
+  if (args.length > 0) {
     const Provider = (props: { value: T; children: unknown }) => {
       return props.children;
     };

@@ -1,7 +1,7 @@
-import { spawn } from "bun";
+import { $, spawn } from "bun";
 
 console.log("🧹  Cleaning dist...");
-await spawn(["rm", "-rf", "dist"]).exited;
+await $`rm -rf dist`;
 
 console.log("📦  Bundling with Bun...");
 const buildResult = await Bun.build({
@@ -17,8 +17,7 @@ const buildResult = await Bun.build({
   target: "bun",
   format: "esm",
   sourcemap: "none",
-
-  minify: false, // Libraries usually don't minify to keep readable stacktraces, user can minify
+  minify: false,
 });
 
 if (!buildResult.success) {

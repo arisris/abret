@@ -1,5 +1,5 @@
-import { jsx } from "../src/jsx";
 import { render } from "../src/html";
+import { jsx } from "../src/jsx";
 
 const ITERATIONS = 100_000;
 
@@ -28,7 +28,6 @@ const vnode = jsx("div", { id: "test", children: "hello" });
 const startRender = performance.now();
 for (let i = 0; i < ITERATIONS; i++) {
   const res = render(vnode);
-  // @ts-ignore
   res.toString();
 }
 const endRender = performance.now();
@@ -59,9 +58,7 @@ const startComplex = performance.now();
 const COMPLEX_ITERATIONS = 10_000;
 for (let i = 0; i < COMPLEX_ITERATIONS; i++) {
   const res = render(complexNode);
-  // @ts-ignore
   if (res instanceof Promise) await res;
-  // @ts-ignore
   else res.toString();
 }
 const endComplex = performance.now();

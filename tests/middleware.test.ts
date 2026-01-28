@@ -1,10 +1,10 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, rmdir, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createAbret } from "../src";
 import { serveStatic } from "../src/middleware/static"; // Importing from source submodule per user request
-import { join } from "path";
-import { writeFile, unlink, mkdir, rmdir } from "fs/promises";
 
-const { createRoute, mergeRoutes } = createAbret();
+const { createRoute } = createAbret();
 
 const TEST_DIR = "./tests/fixtures";
 const TEST_FILE = "test.txt";
@@ -37,19 +37,14 @@ describe("serveStatic middleware", () => {
       }),
     );
 
-    const handler = route["/static/*"] as (
+    const _handler = route["/static/*"] as (
       req: Bun.BunRequest,
       server: Bun.Server<undefined>,
     ) => Promise<Response>;
 
-    const mockReq = {
-      url: `http://localhost/static/${TEST_FILE}`,
-      method: "GET",
-    } as Bun.BunRequest;
-
     // We mock server but we don't need it for serveStatic basic usage
-    const mockServer = {} as Bun.Server<undefined>;
-    const next = () => new Response("Not Found", { status: 404 });
+    const _mockServer = {} as Bun.Server<undefined>;
+    const _next = () => new Response("Not Found", { status: 404 });
 
     // The middleware is wrapped within the route handler.
     // However, createRoute wraps the middleware around the handler.
@@ -111,7 +106,9 @@ describe("serveStatic middleware", () => {
       staticMiddleware,
     );
 
-    const pathHandler = routeWithMiddleware["/static/*"] as Function;
+    const pathHandler = routeWithMiddleware["/static/*"] as (
+      ...args: any[]
+    ) => any;
 
     // Test HIT
     const resHit = await pathHandler(
@@ -141,7 +138,7 @@ describe("serveStatic middleware", () => {
 
     const route = createRoute("/static/*", dummyHandler, staticMiddleware);
 
-    const pathHandler = route["/static/*"] as Function;
+    const pathHandler = route["/static/*"] as (...args: any[]) => any;
 
     // Test MISS
     const resMiss = await pathHandler(
@@ -168,7 +165,7 @@ describe("serveStatic middleware", () => {
       staticMiddleware,
     );
 
-    const handler = route["/app/*"] as Function;
+    const handler = route["/app/*"] as (...args: any[]) => any;
 
     const res = await handler(
       {
@@ -194,7 +191,7 @@ describe("serveStatic middleware", () => {
       staticMiddleware,
     );
 
-    const handler = route["/api/*"] as Function;
+    const handler = route["/api/*"] as (...args: any[]) => any;
 
     // Request /api/test.txt -> rewrites to /test.txt -> looks in TEST_DIR/test.txt
     const res = await handler(
@@ -224,7 +221,7 @@ describe("serveStatic middleware", () => {
       staticMiddleware,
     );
 
-    const handler = route["/static/*"] as Function;
+    const handler = route["/static/*"] as (...args: any[]) => any;
 
     const res = await handler(
       {

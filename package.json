@@ -53,6 +53,7 @@
     "build": "bun scripts/build.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "check": "bunx @biomejs/biome check --write",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {

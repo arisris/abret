@@ -1,11 +1,11 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { createAbret } from "../src";
 import {
   createContext,
-  setContext,
-  useContext,
   hasContext,
   runWithContext,
+  setContext,
+  useContext,
 } from "../src/store";
 
 // Default instance with "both" trailing slash mode
@@ -41,7 +41,7 @@ describe("createRoute", () => {
 
 describe("createMiddleware", () => {
   test("creates middleware function", () => {
-    const middleware = createMiddleware((req, server, next) => {
+    const middleware = createMiddleware((_req, _server, next) => {
       return next();
     });
     expect(typeof middleware).toBe("function");
@@ -50,7 +50,7 @@ describe("createMiddleware", () => {
 
 describe("middleware integration", () => {
   test("middleware can intercept and return early", async () => {
-    const authMiddleware = createMiddleware((req, server, next) => {
+    const authMiddleware = createMiddleware((_req, _server, _next) => {
       return new Response("Unauthorized", { status: 401 });
     });
 
@@ -74,7 +74,7 @@ describe("middleware integration", () => {
   });
 
   test("middleware can pass to next handler", async () => {
-    const loggingMiddleware = createMiddleware((req, server, next) => {
+    const loggingMiddleware = createMiddleware((_req, _server, next) => {
       return next();
     });
 
@@ -100,17 +100,17 @@ describe("middleware integration", () => {
   test("multiple middlewares execute in order", async () => {
     const order: number[] = [];
 
-    const first = createMiddleware((req, server, next) => {
+    const first = createMiddleware((_req, _server, next) => {
       order.push(1);
       return next();
     });
 
-    const second = createMiddleware((req, server, next) => {
+    const second = createMiddleware((_req, _server, next) => {
       order.push(2);
       return next();
     });
 
-    const third = createMiddleware((req, server, next) => {
+    const third = createMiddleware((_req, _server, next) => {
       order.push(3);
       return next();
     });
@@ -139,7 +139,7 @@ describe("middleware integration", () => {
   });
 
   test("middleware works with method handlers", async () => {
-    const authMiddleware = createMiddleware((req, server, next) => {
+    const authMiddleware = createMiddleware((_req, _server, next) => {
       return next();
     });
 
@@ -160,15 +160,17 @@ describe("middleware integration", () => {
     const mockReq = { url: "http://localhost/api/users" } as Bun.BunRequest;
     const mockServer = {} as Bun.Server<undefined>;
 
-    const getResponse = await handlers.GET!(mockReq, mockServer);
+    const getResponse = await handlers.GET?.(mockReq, mockServer);
+    if (!getResponse) throw new Error("GET handler not found");
     expect(getResponse.status).toBe(200);
 
-    const postResponse = await handlers.POST!(mockReq, mockServer);
+    const postResponse = await handlers.POST?.(mockReq, mockServer);
+    if (!postResponse) throw new Error("POST handler not found");
     expect(postResponse.status).toBe(200);
   });
 
   test("middleware can short-circuit method handlers", async () => {
-    const blockMiddleware = createMiddleware((req, server, next) => {
+    const blockMiddleware = createMiddleware((_req, _server, _next) => {
       return new Response("Blocked", { status: 403 });
     });
 
@@ -188,7 +190,8 @@ describe("middleware integration", () => {
     const mockReq = { url: "http://localhost/api/blocked" } as Bun.BunRequest;
     const mockServer = {} as Bun.Server<undefined>;
 
-    const response = await handlers.GET!(mockReq, mockServer);
+    const response = await handlers.GET?.(mockReq, mockServer);
+    if (!response) throw new Error("GET handler not found");
     expect(response.status).toBe(403);
     expect(await response.text()).toBe("Blocked");
   });
@@ -198,12 +201,12 @@ describe("composeMiddlewares", () => {
   test("composes multiple middlewares into one", async () => {
     const order: string[] = [];
 
-    const logMiddleware = createMiddleware((req, server, next) => {
+    const logMiddleware = createMiddleware((_req, _server, next) => {
       order.push("log");
       return next();
     });
 
-    const authMiddleware = createMiddleware((req, server, next) => {
+    const authMiddleware = createMiddleware((_req, _server, next) => {
       order.push("auth");
       return next();
     });
@@ -232,11 +235,11 @@ describe("composeMiddlewares", () => {
   });
 
   test("composed middleware can short-circuit", async () => {
-    const passMiddleware = createMiddleware((req, server, next) => {
+    const passMiddleware = createMiddleware((_req, _server, next) => {
       return next();
     });
 
-    const blockMiddleware = createMiddleware((req, server, next) => {
+    const blockMiddleware = createMiddleware((_req, _server, _next) => {
       return new Response("Blocked", { status: 403 });
     });
 
@@ -263,7 +266,7 @@ describe("composeMiddlewares", () => {
 
 describe("async middleware", () => {
   test("async middleware works correctly", async () => {
-    const asyncMiddleware = createMiddleware(async (req, server, next) => {
+    const asyncMiddleware = createMiddleware(async (_req, _server, next) => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       return next();
     });
@@ -288,7 +291,7 @@ describe("async middleware", () => {
   });
 
   test("async middleware can modify response", async () => {
-    const timingMiddleware = createMiddleware(async (req, server, next) => {
+    const timingMiddleware = createMiddleware(async (_req, _server, next) => {
       const start = Date.now();
       const response = await next();
       const duration = Date.now() - start;
@@ -426,7 +429,7 @@ describe("Request Context System", () => {
   });
 
   test("middleware can set context for handler", async () => {
-    const authMiddleware = createMiddleware((req, server, next) => {
+    const authMiddleware = createMiddleware((_req, _server, next) => {
       // Middleware sets user in context (no req needed!)
       setContext(UserContext, {
         id: "auth-123",
@@ -437,7 +440,7 @@ describe("Request Context System", () => {
 
     const route = createRoute(
       "/protected",
-      (req) => {
+      (_req) => {
         // Handler uses context (no req needed!)
         const user = useContext(UserContext);
         if (!user) {
@@ -465,12 +468,12 @@ describe("Request Context System", () => {
   test("multiple middlewares can share context", async () => {
     const RequestIdContext = createContext<string>("requestId");
 
-    const requestIdMiddleware = createMiddleware((req, server, next) => {
+    const requestIdMiddleware = createMiddleware((_req, _server, next) => {
       setContext(RequestIdContext, `req-${Date.now()}`);
       return next();
     });
 
-    const authMiddleware = createMiddleware((req, server, next) => {
+    const authMiddleware = createMiddleware((_req, _server, next) => {
       const requestId = useContext(RequestIdContext);
       // Auth middleware can access requestId set by previous middleware
       setContext(UserContext, {
@@ -482,7 +485,7 @@ describe("Request Context System", () => {
 
     const route = createRoute(
       "/test",
-      (req) => {
+      (_req) => {
         const requestId = useContext(RequestIdContext);
         const user = useContext(UserContext);
         return Response.json({ requestId, user });
@@ -589,7 +592,7 @@ describe("Trailing Slash Normalization", () => {
     test("middleware works with both trailing slash variants", async () => {
       const order: string[] = [];
 
-      const logMiddleware = createMiddleware((req, server, next) => {
+      const logMiddleware = createMiddleware((_req, _server, next) => {
         order.push("middleware");
         return next();
       });
@@ -661,7 +664,7 @@ describe("Trailing Slash Normalization", () => {
     test("middleware applies to both variants in route group", async () => {
       const order: string[] = [];
 
-      const authMiddleware = createMiddleware((req, server, next) => {
+      const authMiddleware = createMiddleware((_req, _server, next) => {
         order.push("auth");
         return next();
       });
@@ -916,7 +919,7 @@ describe("createAbret", () => {
         expect(res2.status).toBe(308);
         const location = res2.headers.get("Location");
         expect(location).toBeTruthy();
-        expect(location!.endsWith("/api/hello")).toBe(true);
+        expect(location?.endsWith("/api/hello")).toBe(true);
       } finally {
         server.stop();
       }

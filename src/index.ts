@@ -79,8 +79,8 @@ const wrapWithMiddleware = <P extends string, S = undefined>(
 
       const next: NextFunction = () => {
         if (index < middlewares.length) {
-          const middleware = middlewares[index++]!;
-          return middleware(req, server, next);
+          const middleware = middlewares[index++];
+          if (middleware) return middleware(req, server, next);
         }
         return handler(req, server);
       };
@@ -253,7 +253,7 @@ const makeCreateRoute = (trailingSlash: TrailingSlashMode = "both") => {
 
       routes[withoutSlash] = wrappedValue;
       // Add redirect for trailing slash variant
-      routes[withSlash] = ((req) => {
+      routes[withSlash] = ((req, _server) => {
         const url = new URL(req.url);
         if (url.pathname.endsWith("/")) {
           url.pathname = url.pathname.slice(0, -1);
@@ -284,7 +284,7 @@ const makeCreateRoute = (trailingSlash: TrailingSlashMode = "both") => {
  *   return next();
  * });
  *
- * const loggingMiddleware = createMiddleware((req, server, next) => {
+ * const loggingMiddleware = createMiddleware((_req, _server, next) => {
  *   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
  *   return next();
  * });
@@ -314,8 +314,8 @@ export const composeMiddlewares = <P extends string = string, S = undefined>(
 
     const next: NextFunction = () => {
       if (index < middlewares.length) {
-        const middleware = middlewares[index++]!;
-        return middleware(req, server, next);
+        const middleware = middlewares[index++];
+        if (middleware) return middleware(req, server, next);
       }
       return finalNext();
     };
@@ -365,7 +365,9 @@ export const mergeRoutes = <T extends RouteObject[]>(
  * @internal
  */
 type UnionToIntersection<U> = (
-  U extends unknown ? (k: U) => void : never
+  U extends unknown
+    ? (k: U) => void
+    : never
 ) extends (k: infer I) => void
   ? I
   : never;
@@ -500,7 +502,7 @@ export interface AbretInstance {
  * });
  *
  * // Create middleware
- * const auth = createMiddleware((req, server, next) => {
+ * const auth = createMiddleware((req, _server, next) => {
  *   if (!req.headers.get("Authorization")) {
  *     return new Response("Unauthorized", { status: 401 });
  *   }

@@ -1,5 +1,5 @@
+import path from "node:path";
 import type { Middleware } from "../..";
-import path from "path";
 
 export type ServeStaticOptions = {
   /**
@@ -32,7 +32,7 @@ export type ServeStaticOptions = {
  * behaves like hono serveStatic
  */
 export const serveStatic = (options: ServeStaticOptions = {}): Middleware => {
-  return async (req, server, next) => {
+  return async (req, _server, next) => {
     // Only serve GET and HEAD requests
     if (req.method !== "GET" && req.method !== "HEAD") {
       return next();

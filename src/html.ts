@@ -1,4 +1,4 @@
-import { VNode, Fragment, type JSXNode, AsyncBuffer, SafeString } from "./jsx";
+import { AsyncBuffer, Fragment, type JSXNode, SafeString, VNode } from "./jsx";
 import { getContextStore } from "./store";
 
 export { AsyncBuffer, SafeString, VNode, Fragment, type JSXNode };
@@ -44,7 +44,9 @@ export class HTMLResponse extends Response {
   init(newInit: ResponseInit): HTMLResponse {
     const currentHeaders = new Headers(this.headers);
     if (newInit.headers) {
-      new Headers(newInit.headers).forEach((v, k) => currentHeaders.set(k, v));
+      new Headers(newInit.headers).forEach((v, k) => {
+        currentHeaders.set(k, v);
+      });
     }
 
     return new HTMLResponse(this._bodySource, {
@@ -164,7 +166,7 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
   let mode = MODE_TEXT;
   let buffer = "";
   let quote = "";
-  let char = "";
+  let char: string | undefined = "";
   let propName: any;
 
   // We store the tree as nested arrays matching the `current` structure
@@ -213,7 +215,8 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
     const chunk = statics[i];
     if (!chunk) continue;
     for (let j = 0; j < chunk.length; j++) {
-      char = chunk[j]!;
+      char = chunk[j];
+      if (char === undefined) continue;
 
       if (mode === MODE_TEXT) {
         if (char === "<") {
@@ -457,7 +460,7 @@ export function render(node: any): SafeString | Promise<SafeString> {
       }
 
       // Handle dangerouslySetInnerHTML
-      if (dangerouslySetInnerHTML && dangerouslySetInnerHTML.__html) {
+      if (dangerouslySetInnerHTML?.__html) {
         return raw(
           `<${tag}${attrs}>${dangerouslySetInnerHTML.__html}</${tag}>`,
         );
@@ -548,10 +551,10 @@ function processMetadata(html: string): string {
         const httpEquiv = match.match(/http-equiv=["']([^"']+)["']/i);
 
         let key: string | undefined;
-        if (name && name[1]) key = `name:${name[1]}`;
-        else if (property && property[1]) key = `property:${property[1]}`;
-        else if (charset && charset[1]) key = `charset`;
-        else if (httpEquiv && httpEquiv[1]) key = `http-equiv:${httpEquiv[1]}`;
+        if (name?.[1]) key = `name:${name[1]}`;
+        else if (property?.[1]) key = `property:${property[1]}`;
+        else if (charset?.[1]) key = "charset";
+        else if (httpEquiv?.[1]) key = `http-equiv:${httpEquiv[1]}`;
 
         metaTags.push({ tag: "meta", content: match, key });
         return "";
@@ -559,9 +562,7 @@ function processMetadata(html: string): string {
       if (match.toLowerCase().startsWith("<link")) {
         const rel = match.match(/rel=["']([^"']+)["']/i);
         const key =
-          rel && rel[1] && rel[1].toLowerCase() === "canonical"
-            ? "canonical"
-            : undefined;
+          rel?.[1]?.toLowerCase() === "canonical" ? "canonical" : undefined;
         linkTags.push({ tag: "link", content: match, key });
         return "";
       }
@@ -579,23 +580,33 @@ function processMetadata(html: string): string {
 
   // Priority Order
   if (metaMap.has("charset")) {
-    headContent.push(metaMap.get("charset")!);
+    const charsetTag = metaMap.get("charset");
+    if (charsetTag) headContent.push(charsetTag);
     metaMap.delete("charset");
   }
   if (titleTag) headContent.push(titleTag);
   if (metaMap.has("name:viewport")) {
-    headContent.push(metaMap.get("name:viewport")!);
+    const viewportTag = metaMap.get("name:viewport");
+    if (viewportTag) headContent.push(viewportTag);
     metaMap.delete("name:viewport");
   }
-  metaMap.forEach((v) => headContent.push(v));
-  metaTags.filter((m) => !m.key).forEach((m) => headContent.push(m.content));
+  metaMap.forEach((v) => {
+    headContent.push(v);
+  });
+  metaTags
+    .filter((m) => !m.key)
+    .forEach((m) => {
+      headContent.push(m.content);
+    });
 
   const linkMap = new Map<string, string>();
   linkTags.forEach((l) => {
     if (l.key) linkMap.set(l.key, l.content);
     else headContent.push(l.content);
   });
-  linkMap.forEach((v) => headContent.push(v));
+  linkMap.forEach((v) => {
+    headContent.push(v);
+  });
 
   const headString = headContent.join("");
 

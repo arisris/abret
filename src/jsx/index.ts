@@ -23,6 +23,7 @@ export class AsyncBuffer extends ReadableStream<Uint8Array> {
   }
 
   // Promise compatibility
+  // biome-ignore lint/suspicious/noThenProperty: Intentional thenable behavior
   then<TResult1 = SafeString, TResult2 = never>(
     onfulfilled?:
       | ((value: SafeString) => TResult1 | PromiseLike<TResult1>)
@@ -46,7 +47,7 @@ export class AsyncBuffer extends ReadableStream<Uint8Array> {
 // VNode Structure
 export class VNode {
   constructor(
-    public tag: string | Function | typeof Fragment,
+    public tag: string | ((props: any) => any) | typeof Fragment,
     public props: Record<string, any>,
     public children: any,
   ) {}
@@ -72,7 +73,7 @@ export type JSXNode =
 export const Fragment = Symbol("Fragment");
 
 export function jsx(
-  tag: string | Function | typeof Fragment,
+  tag: string | ((props: any) => any) | typeof Fragment,
   props: Record<string, any>,
 ): VNode {
   const { children, ...rest } = props || {};
@@ -92,6 +93,6 @@ export namespace JSX {
     };
   }
   export interface ElementChildrenAttribute {
-    children: {};
+    children: unknown;
   }
 }

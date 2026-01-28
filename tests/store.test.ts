@@ -1,13 +1,12 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
-  createContext,
-  useContext,
-  setContext,
-  hasContext,
   clearContext,
+  createContext,
+  hasContext,
   runWithContext,
   runWithContextValue,
-  type ContextWithProvider,
+  setContext,
+  useContext,
 } from "../src/store";
 
 // Define test contexts

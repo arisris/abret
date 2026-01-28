@@ -3,17 +3,11 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "abret": [
-        "../src/index.ts"
-      ],
-      "abret/*": [
-        "../src/*"
-      ]
+      "abret": ["../src/index.ts"],
+      "abret/*": ["../src/*"]
     },
     "jsx": "react-jsx",
     "jsxImportSource": "abret/jsx"
   },
-  "include": [
-    "."
-  ]
+  "include": ["."]
 }

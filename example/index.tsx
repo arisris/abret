@@ -1,12 +1,7 @@
 /** @jsxImportSource abret/jsx */
 import { createAbret } from "abret";
 import { html } from "abret/html";
-import {
-  createContext,
-  useContext,
-  setContext,
-  type Context,
-} from "abret/store";
+import { createContext, setContext, useContext } from "abret/store";
 
 // Initialize Abret
 const {
@@ -27,7 +22,7 @@ const CurrentUserContext = createContext<{ name: string; role: string }>(
 );
 
 // Middleware: Logger
-const logger = createMiddleware((req, server, next) => {
+const logger = createMiddleware((req, _server, next) => {
   const start = performance.now();
   console.log(`[${req.method}] ${req.url}`);
   const res = next();
@@ -47,7 +42,7 @@ const logger = createMiddleware((req, server, next) => {
 });
 
 // Middleware: Fake Auth (adds user to context)
-const auth = createMiddleware((req, server, next) => {
+const auth = createMiddleware((req, _server, next) => {
   const url = new URL(req.url);
   // Simulating auth via query param ?user=name for demo
   const userParam = url.searchParams.get("user") || "Guest";
