@@ -21,11 +21,8 @@ bun add abret
 Create a file named `server.ts`:
 
 ```ts
-import { createAbret } from "abret";
+import { createRoute, mergeRoutes } from "abret";
 import { html } from "abret/html";
-
-// Initialize Abret
-const { createRoute, mergeRoutes } = createAbret();
 
 const home = createRoute("/", () => {
   return html`<h1>Welcome to Abret</h1>`;

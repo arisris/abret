@@ -1,28 +1,10 @@
 # API Reference
 
-## Core Factory
-
-### `createAbret(config)`
-
-Initializes the Abret library and returns the core functions.
-
-```ts
-const {
-  createRoute,
-  createRouteGroup,
-  mergeRoutes,
-  createMiddleware,
-  composeMiddlewares,
-} = createAbret({ trailingSlash: "both" });
-```
-
-- **config.trailingSlash**: `"both" | "strip" | "none"` (default: `"both"`).
-
 ## Routing
 
 ### `createRoute(path, handler, ...middleware)`
 
-Creates a route definition.
+Creates a route definition. Abret uses exact path matching as provided in the `path` argument. No automatic trailing slash normalization or redirection is performed.
 
 - **path**: URL path pattern (e.g., `/users/:id`).
 - **handler**: Function `(req, server) => Response` or object `{ GET: handler, ... }`.

@@ -1,10 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rmdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createAbret } from "../src";
-import { serveStatic } from "../src/middleware/static"; // Importing from source submodule per user request
-
-const { createRoute } = createAbret();
+import { createRoute } from "../src";
+import { serveStatic } from "../src/middleware/static";
 
 const TEST_DIR = "./tests/fixtures";
 const TEST_FILE = "test.txt";

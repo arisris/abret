@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createAbret } from "../src";
+import {
+  composeMiddlewares,
+  createMiddleware,
+  createRoute,
+  mergeRoutes,
+} from "../src";
 import {
   createContext,
   hasContext,
@@ -7,15 +12,6 @@ import {
   setContext,
   useContext,
 } from "../src/store";
-
-// Default instance with "both" trailing slash mode
-const {
-  createRoute,
-  createRouteGroup,
-  mergeRoutes,
-  createMiddleware,
-  composeMiddlewares,
-} = createAbret();
 
 describe("createRoute", () => {
   test("creates basic route without middleware", () => {
@@ -514,539 +510,47 @@ describe("Request Context System", () => {
 // Trailing Slash Normalization Tests
 // ============================================================================
 
-describe("Trailing Slash Normalization", () => {
-  describe("createRoute trailing slash handling", () => {
-    test("creates both variants for basic route", () => {
-      const route = createRoute("/hello", () => new Response("Hello"));
+describe("Routing (Exact Matching)", () => {
+  test("registers path exactly as defined", () => {
+    const route = createRoute("/hello", () => new Response("Hello"));
 
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-      expect(typeof route["/hello"]).toBe("function");
-      expect(typeof route["/hello/"]).toBe("function");
-    });
-
-    test("creates both variants for route defined with trailing slash", () => {
-      const route = createRoute("/hello/", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-    });
-
-    test("root path only creates single variant", () => {
-      const route = createRoute("/", () => new Response("Home"));
-
-      expect(route).toHaveProperty("/");
-      expect(Object.keys(route).length).toBe(1);
-    });
-
-    test("both variants return same response", async () => {
-      const route = createRoute("/test", () => new Response("Test Content"));
-
-      const mockReq = { url: "http://localhost/test" } as Bun.BunRequest;
-      const mockServer = {} as Bun.Server<undefined>;
-
-      const handler = route["/test"] as (
-        req: Bun.BunRequest,
-        server: Bun.Server<undefined>,
-      ) => Response;
-      const handlerWithSlash = route["/test/"] as (
-        req: Bun.BunRequest,
-        server: Bun.Server<undefined>,
-      ) => Response;
-
-      const response1 = await handler(mockReq, mockServer);
-      const response2 = await handlerWithSlash(mockReq, mockServer);
-
-      expect(await response1.text()).toBe("Test Content");
-      expect(await response2.text()).toBe("Test Content");
-    });
-
-    test("creates both variants for route with method handlers", () => {
-      const route = createRoute("/api", {
-        GET: () => Response.json({ method: "GET" }),
-        POST: () => Response.json({ method: "POST" }),
-      });
-
-      expect(route).toHaveProperty("/api");
-      expect(route).toHaveProperty("/api/");
-      expect(typeof route["/api"]).toBe("object");
-      expect(typeof route["/api/"]).toBe("object");
-    });
-
-    test("creates both variants for dynamic routes", () => {
-      const route = createRoute("/users/:id", (req) =>
-        Response.json({ id: req.params.id }),
-      );
-
-      expect(route).toHaveProperty("/users/:id");
-      expect(route).toHaveProperty("/users/:id/");
-    });
-
-    test("creates both variants for nested path", () => {
-      const route = createRoute("/api/v1/users", () => new Response("Users"));
-
-      expect(route).toHaveProperty("/api/v1/users");
-      expect(route).toHaveProperty("/api/v1/users/");
-    });
-
-    test("middleware works with both trailing slash variants", async () => {
-      const order: string[] = [];
-
-      const logMiddleware = createMiddleware((_req, _server, next) => {
-        order.push("middleware");
-        return next();
-      });
-
-      const route = createRoute(
-        "/protected",
-        () => {
-          order.push("handler");
-          return new Response("Protected");
-        },
-        logMiddleware,
-      );
-
-      const mockReq = { url: "http://localhost/protected" } as Bun.BunRequest;
-      const mockServer = {} as Bun.Server<undefined>;
-
-      // Test without trailing slash
-      const handler = route["/protected"] as (
-        req: Bun.BunRequest,
-        server: Bun.Server<undefined>,
-      ) => Response;
-      await handler(mockReq, mockServer);
-
-      expect(order).toEqual(["middleware", "handler"]);
-
-      // Reset and test with trailing slash
-      order.length = 0;
-
-      const handlerWithSlash = route["/protected/"] as (
-        req: Bun.BunRequest,
-        server: Bun.Server<undefined>,
-      ) => Response;
-      await handlerWithSlash(mockReq, mockServer);
-
-      expect(order).toEqual(["middleware", "handler"]);
-    });
+    expect(route).toHaveProperty("/hello");
+    expect(route).not.toHaveProperty("/hello/");
+    expect(Object.keys(route).length).toBe(1);
   });
 
-  describe("createRouteGroup trailing slash handling", () => {
-    test("creates both variants for grouped route", () => {
-      const api = createRouteGroup("/api");
+  test("registers path with trailing slash exactly as defined", () => {
+    const route = createRoute("/hello/", () => new Response("Hello"));
 
-      const route = api("/users", () => Response.json({ users: [] }));
-
-      expect(route).toHaveProperty("/api/users");
-      expect(route).toHaveProperty("/api/users/");
-    });
-
-    test("creates both variants for grouped route with trailing slash in path", () => {
-      const api = createRouteGroup("/api");
-
-      const route = api("/users/", () => Response.json({ users: [] }));
-
-      expect(route).toHaveProperty("/api/users");
-      expect(route).toHaveProperty("/api/users/");
-    });
-
-    test("creates both variants for grouped dynamic route", () => {
-      const api = createRouteGroup("/api");
-
-      const route = api("/users/:id", (req) =>
-        Response.json({ id: req.params.id }),
-      );
-
-      expect(route).toHaveProperty("/api/users/:id");
-      expect(route).toHaveProperty("/api/users/:id/");
-    });
-
-    test("middleware applies to both variants in route group", async () => {
-      const order: string[] = [];
-
-      const authMiddleware = createMiddleware((_req, _server, next) => {
-        order.push("auth");
-        return next();
-      });
-
-      const api = createRouteGroup("/api", [authMiddleware]);
-
-      const route = api("/protected", () => {
-        order.push("handler");
-        return new Response("OK");
-      });
-
-      const mockReq = {
-        url: "http://localhost/api/protected",
-      } as Bun.BunRequest;
-      const mockServer = {} as Bun.Server<undefined>;
-
-      // Test without trailing slash
-      const handler = route["/api/protected"] as (
-        req: Bun.BunRequest,
-        server: Bun.Server<undefined>,
-      ) => Response;
-      await handler(mockReq, mockServer);
-
-      expect(order).toEqual(["auth", "handler"]);
-
-      // Reset and test with trailing slash
-      order.length = 0;
-
-      const handlerWithSlash = route["/api/protected/"] as (
-        req: Bun.BunRequest,
-        server: Bun.Server<undefined>,
-      ) => Response;
-      await handlerWithSlash(mockReq, mockServer);
-
-      expect(order).toEqual(["auth", "handler"]);
-    });
+    expect(route).toHaveProperty("/hello/");
+    expect(route).not.toHaveProperty("/hello");
+    expect(Object.keys(route).length).toBe(1);
   });
 
-  describe("mergeRoutes with trailing slash variants", () => {
-    test("merges routes with all trailing slash variants", () => {
-      const routes = mergeRoutes(
-        createRoute("/hello", () => new Response("Hello")),
-        createRoute("/world", () => new Response("World")),
-      );
+  test("works with real server - no automatic redirects", async () => {
+    const routes = mergeRoutes(
+      createRoute("/", () => new Response("Home")),
+      createRoute("/api/hello", () => new Response("Hello API")),
+    );
 
-      expect(routes).toHaveProperty("/hello");
-      expect(routes).toHaveProperty("/hello/");
-      expect(routes).toHaveProperty("/world");
-      expect(routes).toHaveProperty("/world/");
+    const server = Bun.serve({
+      port: 0,
+      routes,
+      fetch() {
+        return new Response("Not Found", { status: 404 });
+      },
     });
 
-    test("merges grouped routes with all trailing slash variants", () => {
-      const api = createRouteGroup("/api");
-
-      const routes = mergeRoutes(
-        api("/users", () => Response.json([])),
-        api("/posts", () => Response.json([])),
-      );
-
-      expect(routes).toHaveProperty("/api/users");
-      expect(routes).toHaveProperty("/api/users/");
-      expect(routes).toHaveProperty("/api/posts");
-      expect(routes).toHaveProperty("/api/posts/");
-    });
-  });
-
-  describe("Trailing slash with real Bun.serve integration", () => {
-    test("routes work with and without trailing slash in server", async () => {
-      const routes = mergeRoutes(
-        createRoute("/", () => new Response("Home")),
-        createRoute("/api/hello", () => new Response("Hello API")),
-        createRoute("/api/users/:id", (req) =>
-          Response.json({ id: req.params.id }),
-        ),
-      );
-
-      const server = Bun.serve({
-        port: 0, // Random available port
-        routes,
-        fetch() {
-          return new Response("Not Found", { status: 404 });
-        },
-      });
-
-      try {
-        // Test root (only one variant)
-        const rootRes = await fetch(`${server.url}`);
-        expect(await rootRes.text()).toBe("Home");
-
-        // Test without trailing slash
-        const res1 = await fetch(`${server.url}api/hello`);
-        expect(await res1.text()).toBe("Hello API");
-
-        // Test with trailing slash
-        const res2 = await fetch(`${server.url}api/hello/`);
-        expect(await res2.text()).toBe("Hello API");
-
-        // Test dynamic route without trailing slash
-        const res3 = await fetch(`${server.url}api/users/123`);
-        expect(((await res3.json()) as { id: string }).id).toBe("123");
-
-        // Test dynamic route with trailing slash
-        const res4 = await fetch(`${server.url}api/users/456/`);
-        expect(((await res4.json()) as { id: string }).id).toBe("456");
-      } finally {
-        server.stop();
-      }
-    });
-
-    test("route group works with trailing slash in server", async () => {
-      const api = createRouteGroup("/api/v1");
-
-      const routes = mergeRoutes(
-        createRoute("/", () => new Response("Home")),
-        api("/status", () => Response.json({ status: "ok" })),
-        api("/users", () => Response.json({ users: [] })),
-      );
-
-      const server = Bun.serve({
-        port: 0,
-        routes,
-        fetch() {
-          return new Response("Not Found", { status: 404 });
-        },
-      });
-
-      try {
-        // Test without trailing slash
-        const res1 = await fetch(`${server.url}api/v1/status`);
-        expect(((await res1.json()) as { status: string }).status).toBe("ok");
-
-        // Test with trailing slash
-        const res2 = await fetch(`${server.url}api/v1/status/`);
-        expect(((await res2.json()) as { status: string }).status).toBe("ok");
-
-        // Test another route without trailing slash
-        const res3 = await fetch(`${server.url}api/v1/users`);
-        expect(((await res3.json()) as { users: unknown[] }).users).toEqual([]);
-
-        // Test another route with trailing slash
-        const res4 = await fetch(`${server.url}api/v1/users/`);
-        expect(((await res4.json()) as { users: unknown[] }).users).toEqual([]);
-      } finally {
-        server.stop();
-      }
-    });
-  });
-});
-
-// ============================================================================
-// createAbret Factory Tests
-// ============================================================================
-
-describe("createAbret", () => {
-  describe('trailingSlash: "both" (default)', () => {
-    test("creates both path variants", () => {
-      const { createRoute } = createAbret({ trailingSlash: "both" });
-
-      const route = createRoute("/hello", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-      expect(Object.keys(route).length).toBe(2);
-    });
-
-    test("default config uses 'both' mode", () => {
-      const { createRoute } = createAbret(); // No config = default
-
-      const route = createRoute("/hello", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-    });
-
-    test("normalizes path with trailing slash to both variants", () => {
-      const { createRoute } = createAbret({ trailingSlash: "both" });
-
-      const route = createRoute("/hello/", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-    });
-  });
-
-  describe('trailingSlash: "strip"', () => {
-    test("creates canonical path and redirect handler", () => {
-      const { createRoute } = createAbret({ trailingSlash: "strip" });
-
-      const route = createRoute("/hello", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-      expect(Object.keys(route).length).toBe(2);
-    });
-
-    test("strips trailing slash from defined path and adds redirect", () => {
-      const { createRoute } = createAbret({ trailingSlash: "strip" });
-
-      const route = createRoute("/hello/", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(route).toHaveProperty("/hello/");
-      expect(Object.keys(route).length).toBe(2);
-    });
-
-    test("works with route groups", () => {
-      const { createRoute, createRouteGroup } = createAbret({
-        trailingSlash: "strip",
-      });
-
-      const api = createRouteGroup("/api");
-      const route = api("/users/", () => Response.json([]));
-
-      expect(route).toHaveProperty("/api/users");
-      expect(route).toHaveProperty("/api/users/");
-      expect(Object.keys(route).length).toBe(2);
-
-      // Ensure createRoute from same instance also uses strip mode
-      const directRoute = createRoute("/test/", () => new Response("Test"));
-      expect(directRoute).toHaveProperty("/test");
-      expect(directRoute).toHaveProperty("/test/");
-      expect(Object.keys(directRoute).length).toBe(2);
-    });
-
-    test("works with real server - redirects slash routes", async () => {
-      const { createRoute, mergeRoutes } = createAbret({
-        trailingSlash: "strip",
-      });
-
-      const routes = mergeRoutes(
-        createRoute("/", () => new Response("Home")),
-        createRoute("/api/hello", () => new Response("Hello API")),
-      );
-
-      const server = Bun.serve({
-        port: 0,
-        routes,
-        fetch() {
-          return new Response("Not Found", { status: 404 });
-        },
-      });
-
-      try {
-        // Without trailing slash works
-        const res1 = await fetch(`${server.url}api/hello`);
-        expect(await res1.text()).toBe("Hello API");
-
-        // With trailing slash should redirect
-        const res2 = await fetch(`${server.url}api/hello/`, {
-          redirect: "manual",
-        });
-        expect(res2.status).toBe(308);
-        const location = res2.headers.get("Location");
-        expect(location).toBeTruthy();
-        expect(location?.endsWith("/api/hello")).toBe(true);
-      } finally {
-        server.stop();
-      }
-    });
-  });
-
-  describe('trailingSlash: "none" (manual)', () => {
-    test("uses exact path as defined without slash", () => {
-      const { createRoute } = createAbret({ trailingSlash: "none" });
-
-      const route = createRoute("/hello", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello");
-      expect(Object.keys(route).length).toBe(1);
-    });
-
-    test("uses exact path as defined with slash", () => {
-      const { createRoute } = createAbret({ trailingSlash: "none" });
-
-      const route = createRoute("/hello/", () => new Response("Hello"));
-
-      expect(route).toHaveProperty("/hello/");
-      expect(Object.keys(route).length).toBe(1);
-    });
-
-    test("allows different handlers for different paths", () => {
-      const { createRoute, mergeRoutes } = createAbret({
-        trailingSlash: "none",
-      });
-
-      const routes = mergeRoutes(
-        createRoute("/hello", () => new Response("Without slash")),
-        createRoute("/hello/", () => new Response("With slash")),
-      );
-
-      expect(routes).toHaveProperty("/hello");
-      expect(routes).toHaveProperty("/hello/");
-    });
-
-    test("works with route groups - exact path preserved", () => {
-      const { createRouteGroup } = createAbret({ trailingSlash: "none" });
-
-      const api = createRouteGroup("/api");
-      const route = api("/users/", () => Response.json([]));
-
-      expect(route).toHaveProperty("/api/users/");
-      expect(Object.keys(route).length).toBe(1);
-    });
-
-    test("works with real server - only exact paths work", async () => {
-      const { createRoute, mergeRoutes } = createAbret({
-        trailingSlash: "none",
-      });
-
-      const routes = mergeRoutes(
-        createRoute("/", () => new Response("Home")),
-        createRoute("/api/hello", () => new Response("No slash")),
-        createRoute("/api/world/", () => new Response("With slash")),
-      );
-
-      const server = Bun.serve({
-        port: 0,
-        routes,
-        fetch() {
-          return new Response("Not Found", { status: 404 });
-        },
-      });
-
-      try {
-        // /api/hello works, /api/hello/ should 404
-        const res1 = await fetch(`${server.url}api/hello`);
-        expect(await res1.text()).toBe("No slash");
-
-        const res2 = await fetch(`${server.url}api/hello/`);
-        expect(res2.status).toBe(404);
-
-        // /api/world/ works, /api/world should 404
-        const res3 = await fetch(`${server.url}api/world/`);
-        expect(await res3.text()).toBe("With slash");
-
-        const res4 = await fetch(`${server.url}api/world`);
-        expect(res4.status).toBe(404);
-      } finally {
-        server.stop();
-      }
-    });
-  });
-
-  describe("root path handling", () => {
-    test("root path always has single variant regardless of config", () => {
-      for (const mode of ["both", "strip", "none"] as const) {
-        const { createRoute } = createAbret({ trailingSlash: mode });
-        const route = createRoute("/", () => new Response("Home"));
-        expect(Object.keys(route).length).toBe(1);
-        expect(route).toHaveProperty("/");
-      }
-    });
-  });
-
-  describe("multiple instances with different configs", () => {
-    test("each instance uses its own config", () => {
-      const bothAbret = createAbret({ trailingSlash: "both" });
-      const stripAbret = createAbret({ trailingSlash: "strip" });
-      const noneAbret = createAbret({ trailingSlash: "none" });
-
-      const bothRoute = bothAbret.createRoute(
-        "/test",
-        () => new Response("Both"),
-      );
-      const stripRoute = stripAbret.createRoute(
-        "/test",
-        () => new Response("Strip"),
-      );
-      const noneRoute = noneAbret.createRoute(
-        "/test",
-        () => new Response("None"),
-      );
-
-      expect(Object.keys(bothRoute).length).toBe(2);
-      expect(Object.keys(stripRoute).length).toBe(2);
-      expect(Object.keys(noneRoute).length).toBe(1);
-
-      expect(bothRoute).toHaveProperty("/test");
-      expect(bothRoute).toHaveProperty("/test/");
-      expect(stripRoute).toHaveProperty("/test");
-      expect(stripRoute).toHaveProperty("/test/");
-      expect(noneRoute).toHaveProperty("/test");
-    });
+    try {
+      // Exact match works
+      const res1 = await fetch(`${server.url}api/hello`);
+      expect(await res1.text()).toBe("Hello API");
+
+      // No automatic redirect anymore - should return 404 (from fetch fallback)
+      const res2 = await fetch(`${server.url}api/hello/`);
+      expect(res2.status).toBe(404);
+    } finally {
+      server.stop();
+    }
   });
 });

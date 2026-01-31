@@ -1,16 +1,15 @@
-/** @jsxImportSource abret/jsx */
-import { createAbret } from "abret";
+/** @jsxImportSource abret */
+import {
+  composeMiddlewares,
+  createMiddleware,
+  createRoute,
+  createRouteGroup,
+  mergeRoutes,
+} from "abret";
 import { html } from "abret/html";
 import { createContext, setContext, useContext } from "abret/store";
 
-// Initialize Abret
-const {
-  createRoute,
-  mergeRoutes,
-  createRouteGroup,
-  createMiddleware,
-  composeMiddlewares,
-} = createAbret({ trailingSlash: "strip" });
+// Abret uses exact path matching. You can manually handle trailing slashes using catch-all routes.
 
 // ============================================================================
 // 1. Setup Context & Middleware
@@ -204,12 +203,23 @@ const apiRoutes = mergeRoutes(
 // 4. Server Init
 // ============================================================================
 
-const routes = mergeRoutes(home, about, apiRoutes);
+const routes = mergeRoutes(
+  home,
+  about,
+  apiRoutes,
+  createRoute("/*", (req) => {
+    // handle trailing slash
+    if (req.url.endsWith("/")) {
+      return Response.redirect(new URL(req.url.slice(0, -1), req.url));
+    }
+    return new Response("Not Found", { status: 404 });
+  }),
+);
 
-console.log(`🚀 Server running at http://localhost:3000`);
-
-Bun.serve({
-  port: 3000,
+const server = Bun.serve({
+  port: 4000,
   routes,
   development: true,
 });
+
+console.log(`🚀 Server running at ${server.url}`);

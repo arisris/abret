@@ -4,10 +4,13 @@
     "baseUrl": ".",
     "paths": {
       "abret": ["../src/index.ts"],
-      "abret/*": ["../src/*"]
+      "abret/html": ["../src/html.ts"],
+      "abret/store": ["../src/store.ts"],
+      "abret/jsx-runtime": ["../src/jsx/jsx-runtime.ts"],
+      "abret/jsx-dev-runtime": ["../src/jsx/jsx-dev-runtime.ts"]
     },
     "jsx": "react-jsx",
-    "jsxImportSource": "abret/jsx"
+    "jsxImportSource": "abret"
   },
   "include": ["."]
 }

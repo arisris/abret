@@ -20,10 +20,8 @@ Use the `html` helper to return an `HTMLResponse`.
 ### Using JSX
 
 ```tsx
-import { createAbret } from "abret";
+import { createRoute } from "abret";
 import { html } from "abret/html";
-
-const { createRoute } = createAbret();
 
 function App() {
   return <div>Hello World</div>;

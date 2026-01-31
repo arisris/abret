@@ -3,28 +3,12 @@
 // Internal import for use in wrapWithMiddleware
 import { runWithContext as _runWithContext } from "./store";
 
-// ============================================================================
-// Abret Configuration Types
-// ============================================================================
-
-/**
- * Trailing slash handling mode:
- * - "both": Register both `/path` and `/path/` variants (default)
- * - "strip": Normalize to `/path` and redirect `/path/` to `/path`
- * - "none": No automatic handling, use exact paths as defined
- */
-export type TrailingSlashMode = "both" | "strip" | "none";
-
-/**
- * Abret configuration options
- */
-export interface AbretConfig {
-  /**
-   * How to handle trailing slashes in route paths
-   * @default "both"
-   */
-  trailingSlash?: TrailingSlashMode;
-}
+export {
+  createContext,
+  runWithContext,
+  runWithContextValue,
+  useContext,
+} from "./store";
 
 // ============================================================================
 // Middleware Types
@@ -148,127 +132,34 @@ const wrapRouteValue = <P extends string, S = undefined>(
 };
 
 // ============================================================================
-// Trailing Slash Normalization
+// Routing
 // ============================================================================
 
 /**
- * Generates path variants based on trailing slash configuration.
+ * Creates a route with optional middleware support.
+ * Registers the path exactly as defined.
  *
  * @example
  * ```ts
- * // With trailingSlash: "both" (default)
- * normalizePathVariants("/hello", "both")  // ["/hello", "/hello/"]
+ * const home = createRoute("/", () => new Response("Hello World"));
  *
- * // With trailingSlash: "strip"
- * normalizePathVariants("/hello/", "strip") // ["/hello"]
- *
- * // With trailingSlash: "none"
- * normalizePathVariants("/hello", "none")  // ["/hello"] (exact as defined)
+ * const api = createRoute(
+ *   "/api/users",
+ *   {
+ *     GET: () => Response.json({ users: [] }),
+ *     POST: async (req) => Response.json({ created: true }),
+ *   },
+ *   authMiddleware,
+ * );
  * ```
- *
- * @internal
  */
-const normalizePathVariants = (
-  path: string,
-  mode: TrailingSlashMode = "both",
-): string[] => {
-  // Root path always has only one variant
-  if (path === "/" || path === "") {
-    return ["/"];
-  }
-
-  // Normalize: remove trailing slash if present
-  const withoutSlash = path.endsWith("/") ? path.slice(0, -1) : path;
-  const withSlash = `${withoutSlash}/`;
-
-  switch (mode) {
-    case "both":
-      // Return both variants
-      return [withoutSlash, withSlash];
-
-    case "strip":
-      // Always strip trailing slash
-      return [withoutSlash];
-
-    case "none":
-      // No normalization - exact path as defined
-      return [path];
-
-    default:
-      return [withoutSlash, withSlash];
-  }
-};
-
-/**
- * Utility type to remove trailing slash from path
- * @internal
- */
-type RemoveTrailingSlash<P extends string> = P extends "/"
-  ? P
-  : P extends `${infer Base}/`
-    ? Base
-    : P;
-
-/**
- * Utility type to add trailing slash to path
- * @internal
- */
-type AddTrailingSlash<P extends string> = P extends "/"
-  ? P
-  : P extends `${string}/`
-    ? P
-    : `${P}/`;
-
-/**
- * Utility type that represents both path variants (with and without trailing slash)
- * Root path "/" only has single variant
- * @internal
- */
-type PathWithVariants<P extends string> = P extends "/"
-  ? "/"
-  : RemoveTrailingSlash<P> | AddTrailingSlash<RemoveTrailingSlash<P>>;
-
-/**
- * Creates a createRoute function with specific trailing slash configuration
- * @internal
- */
-const makeCreateRoute = (trailingSlash: TrailingSlashMode = "both") => {
-  return <P extends string, S = undefined>(
-    path: P,
-    value: RouteValue<P, S>,
-    ...middlewares: Middleware<P, S>[]
-  ): { [K in PathWithVariants<P>]: RouteValue<P, S> } => {
-    const wrappedValue = wrapRouteValue(value, middlewares);
-    const routes: Record<string, RouteValue<P, S>> = {};
-
-    // Special handling for root path - no variants
-    if (path === "/" || path === "") {
-      routes["/"] = wrappedValue;
-      return routes as { [K in PathWithVariants<P>]: RouteValue<P, S> };
-    }
-
-    if (trailingSlash === "strip") {
-      const withoutSlash = path.endsWith("/") ? path.slice(0, -1) : path;
-      const withSlash = `${withoutSlash}/`;
-
-      routes[withoutSlash] = wrappedValue;
-      // Add redirect for trailing slash variant
-      routes[withSlash] = ((req, _server) => {
-        const url = new URL(req.url);
-        if (url.pathname.endsWith("/")) {
-          url.pathname = url.pathname.slice(0, -1);
-        }
-        return Response.redirect(url.toString(), 308);
-      }) as Bun.Serve.Handler<Bun.BunRequest<P>, Bun.Server<S>, Response>;
-    } else {
-      const variants = normalizePathVariants(path, trailingSlash);
-      for (const variant of variants) {
-        routes[variant] = wrappedValue;
-      }
-    }
-
-    return routes as { [K in PathWithVariants<P>]: RouteValue<P, S> };
-  };
+export const createRoute = <P extends string, S = undefined>(
+  path: P,
+  value: RouteValue<P, S>,
+  ...middlewares: Middleware<P, S>[]
+): Record<P, RouteValue<P, S>> => {
+  const wrappedValue = wrapRouteValue(value, middlewares);
+  return { [path]: wrappedValue } as Record<P, RouteValue<P, S>>;
 };
 
 /**
@@ -281,11 +172,6 @@ const makeCreateRoute = (trailingSlash: TrailingSlashMode = "both") => {
  *   if (!token) {
  *     return new Response("Unauthorized", { status: 401 });
  *   }
- *   return next();
- * });
- *
- * const loggingMiddleware = createMiddleware((_req, _server, next) => {
- *   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
  *   return next();
  * });
  * ```
@@ -343,14 +229,9 @@ export type RouteObject = Record<string, any>;
  * ```ts
  * const index = createRoute("/", () => new Response("Home"));
  * const api = createRoute("/api", { GET: () => Response.json({ ok: true }) });
- * const users = createRoute("/users/:id", (req) => Response.json({ id: req.params.id }));
  *
- * // Instead of:
- * // routes: { ...index, ...api, ...users }
- *
- * // Use:
  * Bun.serve({
- *   routes: mergeRoutes(index, api, users),
+ *   routes: mergeRoutes(index, api),
  * });
  * ```
  */
@@ -373,159 +254,29 @@ type UnionToIntersection<U> = (
   : never;
 
 /**
- * Creates a createRouteGroup function with specific trailing slash configuration
- * @internal
- */
-const makeCreateRouteGroup = (trailingSlash: TrailingSlashMode = "both") => {
-  const createRoute = makeCreateRoute(trailingSlash);
-
-  return <Prefix extends string, S = undefined>(
-    prefix: Prefix,
-    middlewares: Middleware<string, S>[] = [],
-  ) => {
-    return <P extends string>(
-      path: P,
-      value: RouteValue<`${Prefix}${P}`, S>,
-    ) => {
-      type FullPath = `${Prefix}${P}`;
-      const fullPath = `${prefix}${path}` as FullPath;
-      return createRoute(
-        fullPath,
-        value as RouteValue<FullPath, S>,
-        ...(middlewares as unknown as Middleware<FullPath, S>[]),
-      );
-    };
-  };
-};
-
-// ============================================================================
-// Abret Factory
-// ============================================================================
-
-/**
- * Return type of createAbret factory
- */
-export interface AbretInstance {
-  /**
-   * Creates a route with optional middleware support
-   *
-   * @example
-   * ```ts
-   * const home = createRoute("/", () => new Response("Hello World"));
-   *
-   * const api = createRoute(
-   *   "/api/users",
-   *   {
-   *     GET: () => Response.json({ users: [] }),
-   *     POST: async (req) => Response.json({ created: true }),
-   *   },
-   *   authMiddleware,
-   * );
-   * ```
-   */
-  createRoute: ReturnType<typeof makeCreateRoute>;
-
-  /**
-   * Creates a route group factory with a common prefix and optional shared middlewares
-   *
-   * @example
-   * ```ts
-   * const api = createRouteGroup("/api", [authMiddleware]);
-   *
-   * const routes = mergeRoutes(
-   *   api("/users", { GET: () => Response.json([]) }),
-   *   api("/users/:id", (req) => Response.json({ id: req.params.id })),
-   * );
-   * ```
-   */
-  createRouteGroup: ReturnType<typeof makeCreateRouteGroup>;
-
-  /**
-   * Merges multiple route objects into a single routes object
-   *
-   * @example
-   * ```ts
-   * const routes = mergeRoutes(homeRoute, apiRoutes, userRoutes);
-   * Bun.serve({ routes });
-   * ```
-   */
-  mergeRoutes: typeof mergeRoutes;
-
-  /**
-   * Helper to create a middleware function with proper typing
-   *
-   * @example
-   * ```ts
-   * const authMiddleware = createMiddleware(async (req, server, next) => {
-   *   const token = req.headers.get("Authorization");
-   *   if (!token) {
-   *     return new Response("Unauthorized", { status: 401 });
-   *   }
-   *   return next();
-   * });
-   * ```
-   */
-  createMiddleware: typeof createMiddleware;
-
-  /**
-   * Compose multiple middlewares into a single middleware
-   *
-   * @example
-   * ```ts
-   * const combinedMiddleware = composeMiddlewares(
-   *   loggingMiddleware,
-   *   authMiddleware,
-   *   rateLimitMiddleware
-   * );
-   * ```
-   */
-  composeMiddlewares: typeof composeMiddlewares;
-}
-
-/**
- * Creates an Abret instance with custom configuration.
- * This is the main entry point for creating routes with specific trailing slash behavior.
+ * Creates a route group factory with a common prefix and optional shared middlewares.
  *
  * @example
  * ```ts
- * import { createAbret } from "abret";
+ * const api = createRouteGroup("/api", [authMiddleware]);
  *
- * // Create instance with custom config
- * const {
- *   createRoute,
- *   createRouteGroup,
- *   mergeRoutes,
- *   createMiddleware,
- *   composeMiddlewares
- * } = createAbret({
- *   trailingSlash: "strip"  // Only /hello works, not /hello/
- * });
- *
- * // Create middleware
- * const auth = createMiddleware((req, _server, next) => {
- *   if (!req.headers.get("Authorization")) {
- *     return new Response("Unauthorized", { status: 401 });
- *   }
- *   return next();
- * });
- *
- * // Create routes
  * const routes = mergeRoutes(
- *   createRoute("/", () => new Response("Home")),
- *   createRoute("/api/users", { GET: () => Response.json([]) }, auth),
+ *   api("/users", { GET: () => Response.json([]) }),
+ *   api("/users/:id", (req) => Response.json({ id: req.params.id })),
  * );
- *
- * Bun.serve({ routes });
  * ```
  */
-export const createAbret = (config: AbretConfig = {}): AbretInstance => {
-  const { trailingSlash = "both" } = config;
-
-  return {
-    createRoute: makeCreateRoute(trailingSlash),
-    createRouteGroup: makeCreateRouteGroup(trailingSlash),
-    mergeRoutes,
-    createMiddleware,
-    composeMiddlewares,
+export const createRouteGroup = <Prefix extends string, S = undefined>(
+  prefix: Prefix,
+  middlewares: Middleware<string, S>[] = [],
+) => {
+  return <P extends string>(path: P, value: RouteValue<`${Prefix}${P}`, S>) => {
+    type FullPath = `${Prefix}${P}`;
+    const fullPath = `${prefix}${path}` as FullPath;
+    return createRoute(
+      fullPath,
+      value as RouteValue<FullPath, S>,
+      ...(middlewares as unknown as Middleware<FullPath, S>[]),
+    );
   };
 };

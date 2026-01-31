@@ -40,11 +40,8 @@ bun add abret
 Create a simple server with routes and HTML rendering:
 
 ```tsx
-import { createAbret } from "abret";
+import { createRoute, mergeRoutes } from "abret";
 import { html } from "abret/html";
-
-// Initialize Abret
-const { createRoute, mergeRoutes } = createAbret();
 
 const home = createRoute("/", () => {
   return html`
@@ -64,8 +61,10 @@ const api = createRoute("/api/hello", () =>
   Response.json({ message: "Hello World" }),
 );
 
+const routes = mergeRoutes(home, api);
+
 Bun.serve({
-  routes: mergeRoutes(home, api),
+  routes,
 });
 ```
 
@@ -76,9 +75,7 @@ Bun.serve({
 Organize your routes using `createRoute` and `createRouteGroup`. Types for parameters are automatically inferred.
 
 ```ts
-import { createAbret } from "abret";
-
-const { createRouteGroup, mergeRoutes } = createAbret();
+import { createRouteGroup, mergeRoutes } from "abret";
 
 // Create a group with a prefix
 const api = createRouteGroup("/api/v1");
@@ -99,10 +96,8 @@ Bun.serve({ routes });
 Create reusable middleware and share state across the request lifecycle using the unified Context API. Context is implicit and doesn't require passing `req` objects.
 
 ```ts
-import { createAbret } from "abret";
-import { createContext, setContext, useContext } from "abret/store";
-
-const { createRoute, createMiddleware } = createAbret();
+```ts
+import { createRoute, createMiddleware, createContext, setContext, useContext } from "abret";
 
 // Define a type-safe context key
 const UserContext = createContext<{ name: string }>("user");
@@ -132,12 +127,22 @@ const dashboard = createRoute(
 
 Build UI with components and share state using Context, just like in React (but on the server).
 
-```tsx
-import { createAbret } from "abret";
-import { html } from "abret/html";
-import { createContext, useContext } from "abret/store";
+To use JSX, configure your `tsconfig.json`:
 
-const { createRoute } = createAbret();
+```json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "abret"
+  }
+}
+```
+
+Example component:
+
+```tsx
+import { createRoute, createContext, useContext } from "abret";
+import { html } from "abret/html";
 
 const ThemeContext = createContext("light"); // Default value
 
@@ -160,22 +165,24 @@ const page = createRoute("/component", () => {
 ### Core (`abret`)
 
 ```ts
-import { createAbret } from "abret";
-const config = { trailingSlash: "both" }; // "both" | "strip" | "none"
-const {
+import {
   createRoute,
   createRouteGroup,
   mergeRoutes,
   createMiddleware,
   composeMiddlewares,
-} = createAbret(config);
+  createContext,
+  useContext,
+  setContext,
+} from "abret";
 ```
 
-- `createRoute(path, handler, ...middlewares)`
-- `mergeRoutes(...routes)`
-- `createRouteGroup(prefix, middlewares)`
-- `createMiddleware(fn)`
-- `composeMiddlewares(...middlewares)`
+- `createRoute(path, handler, ...middlewares)` - Creates a route. Uses exact path matching.
+- `mergeRoutes(...routes)` - Combines multiple route objects.
+- `createRouteGroup(prefix, middlewares)` - Creates a route group.
+- `createMiddleware(fn)` - Helper for typed middleware.
+- `composeMiddlewares(...middlewares)` - Composes multiple middlewares.
+- Context utilities: `createContext`, `useContext`, `setContext`, `runWithContext`, `runWithContextValue`.
 
 ### Context Store (`abret/store`)
 
