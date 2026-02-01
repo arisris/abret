@@ -153,7 +153,7 @@ const wrapRouteValue = <P extends string, S = undefined>(
  * );
  * ```
  */
-export const createRoute = <P extends string, S = undefined>(
+export const createRoute = <P extends `/${string}`, S = undefined>(
   path: P,
   value: RouteValue<P, S>,
   ...middlewares: Middleware<P, S>[]
@@ -266,17 +266,26 @@ type UnionToIntersection<U> = (
  * );
  * ```
  */
-export const createRouteGroup = <Prefix extends string, S = undefined>(
+export const createRouteGroup = <Prefix extends `/${string}`, S = undefined>(
   prefix: Prefix,
   middlewares: Middleware<string, S>[] = [],
 ) => {
-  return <P extends string>(path: P, value: RouteValue<`${Prefix}${P}`, S>) => {
-    type FullPath = `${Prefix}${P}`;
-    const fullPath = `${prefix}${path}` as FullPath;
+  return <P extends `/${string}` | "">(path: P, value: RouteValue<string, S>) => {
+    // Combine with slashes and replace multiple slashes with a single one
+    // This also guarantees a leading slash
+    let fullPath = `/${prefix}/${path}`.replace(/\/+/g, "/");
+
+    // Strip trailing slash except for root "/"
+    if (fullPath.length > 1 && fullPath.endsWith("/")) {
+      fullPath = fullPath.slice(0, -1);
+    }
+
+    const normalizedPath = (fullPath || "/") as `${Prefix}${P}`;
+
     return createRoute(
-      fullPath,
-      value as RouteValue<FullPath, S>,
-      ...(middlewares as unknown as Middleware<FullPath, S>[]),
+      normalizedPath as `/${string}`,
+      value as RouteValue<`/${string}`, S>,
+      ...(middlewares as unknown as Middleware<`/${string}`, S>[]),
     );
   };
 };

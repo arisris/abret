@@ -21,10 +21,6 @@ export type ServeStaticOptions = {
    * Extension (without dot) -> Mime Type
    */
   mimes?: Record<string, string>;
-  /**
-   * Callback when file is not found.
-   */
-  onNotFound?: (path: string, req: Request) => void;
 };
 
 /**
@@ -84,10 +80,6 @@ export const serveStatic = (options: ServeStaticOptions = {}): Middleware => {
       }
 
       return response;
-    }
-
-    if (options.onNotFound) {
-      options.onNotFound(filePath, req);
     }
 
     return next();
