@@ -16,6 +16,7 @@ const buildResult = await Bun.build({
   outdir: "./dist",
   target: "bun",
   format: "esm",
+  splitting: true,
   sourcemap: "none",
   minify: false,
 });
