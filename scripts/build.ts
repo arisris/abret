@@ -12,6 +12,7 @@ const buildResult = await Bun.build({
     "./src/jsx/jsx-runtime.ts",
     "./src/jsx/jsx-dev-runtime.ts",
     "./src/middleware/static/index.ts",
+    "./src/middleware/transpiler/index.ts",
   ],
   outdir: "./dist",
   target: "bun",

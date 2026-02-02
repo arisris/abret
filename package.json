@@ -52,6 +52,10 @@
     "./middleware/static": {
       "types": "./dist/middleware/static/index.d.ts",
       "import": "./dist/middleware/static/index.js"
+    },
+    "./middleware/transpiler": {
+      "types": "./dist/middleware/transpiler/index.d.ts",
+      "import": "./dist/middleware/transpiler/index.js"
     }
   },
   "scripts": {
