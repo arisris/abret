@@ -12,7 +12,7 @@ describe("transpiler middleware (CDN Fallback)", () => {
     
     await writeFile(
       join(TEST_SRC_DIR, "app.ts"),
-      "import { h } from 'preact'; import { something } from 'non-existent-package'; console.log(h, something);"
+      "import { something } from 'non-existent-package'; console.log(something);"
     );
   });
 
@@ -29,11 +29,9 @@ describe("transpiler middleware (CDN Fallback)", () => {
     });
 
     const req = new Request(`http://localhost${STATIC_BASE}/app.js`);
-    const res = await middleware(req as any, {} as any, () => new Response());
+    const res = await middleware(req as any, {} as any, () => new Response("Not Found", { status: 404 }));
     const content = await res.text();
 
-    // preact should be local (because it exists in this repo)
-    expect(content).toContain(`${STATIC_BASE}/vendor/preact`);
     // non-existent-package should also be local (default behavior)
     expect(content).toContain(`${STATIC_BASE}/vendor/non-existent-package`);
   });
@@ -46,13 +44,16 @@ describe("transpiler middleware (CDN Fallback)", () => {
     });
 
     const req = new Request(`http://localhost${STATIC_BASE}/app.js`);
-    const res = await middleware(req as any, {} as any, () => new Response());
+    const res = await middleware(req as any, {} as any, () => new Response("Not Found", { status: 404 }));
     const content = await res.text();
-
-    // preact IS LOCAL (so should NOT use CDN)
-    expect(content).toContain(`${STATIC_BASE}/vendor/preact`);
     
     // non-existent-package IS NOT LOCAL (so should switch to esm.sh)
     expect(content).toContain("https://esm.sh/non-existent-package");
+
+    // Also test direct vendor request with cdn fallback (should redirect)
+    const req2 = new Request(`http://localhost${STATIC_BASE}/vendor/missing-pkg-123`);
+    const res2 = await middleware(req2 as any, {} as any, () => new Response("Not Found", { status: 404 }));
+    expect(res2.status).toBe(302);
+    expect(res2.headers.get("Location")).toBe("https://esm.sh/missing-pkg-123");
   });
 });

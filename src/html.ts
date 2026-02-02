@@ -1,7 +1,23 @@
 import { AsyncBuffer, Fragment, type JSXNode, SafeString, VNode } from "./jsx";
-import { getContextStore } from "./store";
+import {
+  createContext,
+  getContextStore,
+  runWithContextValue,
+  useContext,
+} from "./store";
 
 export { AsyncBuffer, SafeString, VNode, Fragment, type JSXNode };
+
+/**
+ * Internal Context to collect head elements during render.
+ * Replaces the fragile regex-based scraping.
+ */
+type HeadElement = {
+  type: "title" | "meta" | "link";
+  key?: string; // For deduplication (e.g. 'name:viewport')
+  content: string; // The full HTML string of the tag
+};
+const HeadContext = createContext<HeadElement[]>("abret-head");
 
 /**
  * Helper to create HTML Response automatically
@@ -11,15 +27,10 @@ export class HTMLResponse extends Response {
 
   constructor(body: any, init?: ResponseInit) {
     let normalizedBody = body;
+
     if (body instanceof Promise) {
       normalizedBody = new AsyncBuffer(body);
     }
-
-    // If body is VNode (e.g. user passed raw JSX to HTMLResponse), we can't easily normalize it to BodyInit
-    // without rendering. But Response ctor will fail if we pass VNode.
-    // However, existing usage passes `html(...)` result which IS HTMLResponse.
-    // If user does `new HTMLResponse(<div/>)`, it will likely fail unless we render here.
-    // For now, assume usage via `html()` which handles rendering.
 
     const headers = new Headers(init?.headers);
     if (!headers.has("Content-Type")) {
@@ -30,17 +41,6 @@ export class HTMLResponse extends Response {
     this._bodySource = body;
   }
 
-  /**
-   * Initializes the response with new options.
-   *
-   * @param newInit - The new options to apply to the response.
-   * @returns A new HTMLResponse instance with the updated options.
-   *
-   * @example
-   * ```ts
-   * const response = new HTMLResponse(<div>Hello World</div>).init({ status: 200 });
-   * ```
-   */
   init(newInit: ResponseInit): HTMLResponse {
     const currentHeaders = new Headers(this.headers);
     if (newInit.headers) {
@@ -56,17 +56,6 @@ export class HTMLResponse extends Response {
     });
   }
 
-  /**
-   * Adds a DOCTYPE declaration to the response body.
-   *
-   * @param dt - The DOCTYPE declaration to add. Can be a string or a boolean.
-   * @returns A new HTMLResponse instance with the DOCTYPE declaration added.
-   *
-   * @example
-   * ```ts
-   * const response = new HTMLResponse(<div>Hello World</div>).doctype(true);
-   * ```
-   */
   doctype(dt: string | boolean = true): HTMLResponse {
     let prefix = "";
     if (dt === true) prefix = "<!DOCTYPE html>";
@@ -85,7 +74,6 @@ export class HTMLResponse extends Response {
         (content) => raw(prefix + content.toString()),
       );
     } else {
-      // Fallback for VNode or other
       newBodySource = this._bodySource;
     }
 
@@ -97,30 +85,6 @@ export class HTMLResponse extends Response {
   }
 }
 
-/**
- * Creates an implementation of `HTMLResponse` (extends standard `Response`).
- *
- * It supports two calling patterns:
- *
- * 1. **Tagged Template Literal**:
- *    Useful for static HTML chunks or mixing variables.
- *    ```ts
- *    return html`<h1>Hello ${name}</h1>`;
- *    ```
- *
- * 2. **Direct JSX/VNode**:
- *    Useful for rendering whole components or trees.
- *    ```tsx
- *    return html(<App />);
- *    ```
- *
- * You can also pass `ResponseInit` as the second argument (or after template args) to control status/headers:
- * ```ts
- * return html`<div>404</div>`.init({ status: 404 });
- * // OR
- * return html(<ErrorPage />, { status: 500 });
- * ```
- */
 // -------------------------------------------------------------------------
 // HTM-like Parser Constants
 // -------------------------------------------------------------------------
@@ -139,26 +103,33 @@ export function html(
   bodyOrStrings: JSXNode | TemplateStringsArray,
   ...args: any[]
 ): HTMLResponse {
-  if (Array.isArray(bodyOrStrings) && (bodyOrStrings as any).raw) {
-    const vnode = parse(bodyOrStrings as unknown as TemplateStringsArray, args);
-    // Render the tree
-    const rendered = render(vnode);
-    if (rendered instanceof Promise) {
-      return new HTMLResponse(
-        rendered.then((s) => raw(processMetadata(s.toString()))),
-      );
-    }
-    return new HTMLResponse(raw(processMetadata(rendered.toString())));
-  }
+  // Initialize a collection array for this render pass
+  const headCollection: HeadElement[] = [];
 
-  // Direct usage
-  const rendered = render(bodyOrStrings as JSXNode);
+  const runRender = () => {
+    if (Array.isArray(bodyOrStrings) && (bodyOrStrings as any).raw) {
+      const vnode = parse(
+        bodyOrStrings as unknown as TemplateStringsArray,
+        args,
+      );
+      return render(vnode);
+    }
+    return render(bodyOrStrings as JSXNode);
+  };
+
+  // 🛡️ SECURITY & LOGIC FIX:
+  // We wrap the render process in a Context to capture head tags
+  // instead of scraping the output string with Regex later.
+  const rendered = runWithContextValue(HeadContext, headCollection, runRender);
+
   if (rendered instanceof Promise) {
     return new HTMLResponse(
-      rendered.then((s) => raw(processMetadata(s.toString()))),
+      rendered.then((s) => raw(injectMetadata(s.toString(), headCollection))),
     );
   }
-  return new HTMLResponse(raw(processMetadata(rendered.toString())));
+  return new HTMLResponse(
+    raw(injectMetadata(rendered.toString(), headCollection)),
+  );
 }
 
 // Compact HTM parser
@@ -169,10 +140,6 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
   let char: string | undefined = "";
   let propName: any;
 
-  // We store the tree as nested arrays matching the `current` structure
-  // Then map it to VNodes at the end.
-  // [tag, props, children] but using { tag, props, children } is clearer here
-  // Root virtual node
   const root: any = { children: [] };
   let active = root;
   const stack: any[] = [active];
@@ -184,31 +151,23 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
         active.children.push(fields[i - 1]);
       } else if (mode === MODE_TAGNAME) {
         commit();
-        // Dynamic Tag Name: <${Component}
         const tag = fields[i - 1];
         active = openTag(stack, active, tag);
         mode = MODE_WHITESPACE;
       } else if (mode === MODE_WHITESPACE) {
-        // <div ...${props}> or <div ${bool}>
         const val = fields[i - 1];
         if (buffer === "...") {
-          Object.assign(active.props, val); // spread
+          Object.assign(active.props, val);
           buffer = "";
-        } else {
-          // Treat as boolean attribute with implicit name?
-          // For simplicity, we ignore value-only fields in whitespace unless it is spread.
         }
       } else if (mode === MODE_PROPNAME) {
-        // <div ${propName}=...>
         propName = fields[i - 1];
         mode = MODE_PROPVAL;
       } else if (mode === MODE_PROPVAL) {
-        // <div id=${val}>
         active.props[propName] = fields[i - 1];
         mode = MODE_WHITESPACE;
       } else if (mode === MODE_PROPVAL_QUOTE) {
-        // <div id="...${val}... "
-        buffer += fields[i - 1]; // Stringify
+        buffer += fields[i - 1];
       }
     }
 
@@ -227,23 +186,18 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
         }
       } else if (mode === MODE_TAGNAME) {
         if (char === "/" && !buffer) {
-          // </ close
           mode = MODE_CLOSE_TAG;
         } else if (char === ">" || char === "/" || /\s/.test(char)) {
-          // End of tag name
           if (buffer) {
-            // Static tag name
             active = openTag(stack, active, buffer);
           }
           if (char === ">") mode = MODE_TEXT;
           else if (char === "/") {
-            // Self closing <div />
             if (stack.length > 1) {
               closeTag(stack);
               active = stack[stack.length - 1];
             }
           } else mode = MODE_WHITESPACE;
-
           buffer = "";
         } else {
           buffer += char;
@@ -257,7 +211,6 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
         }
       } else if (mode === MODE_WHITESPACE) {
         if (char === "/") {
-          // Self close
           closeTag(stack);
           active = stack[stack.length - 1];
         } else if (char === ">") {
@@ -272,7 +225,6 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
           buffer = "";
           mode = MODE_PROPVAL;
         } else if (char === ">") {
-          // Boolean <div prop>
           active.props[buffer] = true;
           mode = MODE_TEXT;
           buffer = "";
@@ -288,7 +240,6 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
           quote = char;
           mode = MODE_PROPVAL_QUOTE;
         } else if (char === ">") {
-          // <div prop=val>
           active.props[propName] = buffer;
           mode = MODE_TEXT;
           buffer = "";
@@ -313,11 +264,10 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
 
   if (mode === MODE_TEXT) commit();
 
-  // Helper
   function commit() {
     if (buffer) {
       if (mode === MODE_TEXT) {
-        active.children.push(raw(buffer)); // Text node
+        active.children.push(raw(buffer));
       }
       buffer = "";
     }
@@ -325,16 +275,14 @@ function parse(statics: TemplateStringsArray, fields: any[]): any {
 
   function openTag(stack: any[], current: any, tag: any) {
     const newNode = { tag, props: {}, children: [] };
-    current.children.push(newNode); // Add as child
+    current.children.push(newNode);
     stack.push(newNode);
     return newNode;
   }
   function closeTag(stack: any[]) {
-    // Basic pop, robust parsers might verify tag name matched
     if (stack.length > 1) stack.pop();
   }
 
-  // Root children
   if (root.children.length === 1) return toVNode(root.children[0]);
   return root.children.map(toVNode);
 }
@@ -347,7 +295,6 @@ function toVNode(node: any): any {
 
   if (Array.isArray(node)) return node.map(toVNode);
 
-  // If it's not an internal parser node (missing children array), return as is
   if (!node.children || !Array.isArray(node.children)) {
     return node;
   }
@@ -360,17 +307,6 @@ function toVNode(node: any): any {
 // -------------------------------------------------------------------------
 // Renderer
 // -------------------------------------------------------------------------
-/**
- * Renders a JSXNode to a SafeString or Promise<SafeString>.
- *
- * @param node - The JSXNode to render.
- * @returns A SafeString or Promise<SafeString> containing the rendered HTML.
- *
- * @example
- * ```tsx
- * const rendered = render(<div>Hello World</div>);
- * ```
- */
 export function render(node: any): SafeString | Promise<SafeString> {
   if (node instanceof HTMLResponse) {
     return render((node as any)._bodySource);
@@ -398,31 +334,20 @@ export function render(node: any): SafeString | Promise<SafeString> {
   if (node instanceof VNode) {
     // Handle Component
     if (typeof node.tag === "function") {
-      // We identify Provider via a property on the function or check props
-      // But since we control createContext, we can check for the symbol keys
-      // The most robust way is checking the Provider property of the context
-      // But here we have the Provider function itself.
-
-      // We can check if existing contexts map to this provider?
-      // No, we need to know WHICH context this Provider belongs to.
-      // Check if this is a Provider component from createContext
       const providerCtx = (node.tag as any)._context as
         | { id: symbol; defaultValue: unknown }
         | undefined;
-
       if (providerCtx) {
         const value = node.props.value;
         const contextStore = getContextStore();
         const currentStore = contextStore.getStore() || new Map();
         const newStore = new Map(currentStore);
         newStore.set(providerCtx.id, value);
-
         return contextStore.run(newStore, () => {
           return render(node.props.children);
         });
       }
 
-      // Normal Component -> Execute
       let result: any;
       try {
         result = node.tag(node.props);
@@ -430,7 +355,6 @@ export function render(node: any): SafeString | Promise<SafeString> {
         console.error("Error rendering component", e);
         return raw("");
       }
-      // Use handleResult logic implicitly by recursion
       return render(result);
     }
 
@@ -444,12 +368,87 @@ export function render(node: any): SafeString | Promise<SafeString> {
       const tag = node.tag;
       const { children, dangerouslySetInnerHTML, ...rest } = node.props;
 
+      // 🛡️ HEAD HOISTING INTERCEPTION
+      if (tag === "title" || tag === "meta" || tag === "link") {
+        const headStore = useContext(HeadContext);
+        if (headStore) {
+          // Render Attributes
+          const attrs = Object.entries(rest)
+            .map(([key, value]) => {
+              if (value === null || value === undefined || value === false)
+                return "";
+              if (key === "className") key = "class";
+              if (key === "style") value = renderStyle(value);
+              if (value === true) return ` ${key}`;
+              return ` ${key}="${escapeHtml(String(value))}"`;
+            })
+            .join("");
+
+          // Handle Title (needs content resolution)
+          if (tag === "title") {
+            const childrenList = Array.isArray(children)
+              ? children
+              : [children];
+            const renderedContent = render(childrenList);
+
+            const pushTitle = (content: string) => {
+              headStore.push({
+                type: "title",
+                content: `<title${attrs}>${escapeHtml(content)}</title>`,
+              });
+            };
+
+            if (renderedContent instanceof Promise) {
+              return renderedContent.then((c) => {
+                pushTitle(c.toString());
+                return raw(""); // Render nothing in body
+              });
+            }
+            pushTitle(renderedContent.toString());
+            return raw("");
+          }
+
+          // Handle Meta/Link
+          let key: string | undefined;
+          if (tag === "meta") {
+            if (rest.name) key = `name:${rest.name}`;
+            else if (rest.property) key = `property:${rest.property}`;
+            else if (rest.charset) key = "charset";
+            else if (rest["http-equiv"])
+              key = `http-equiv:${rest["http-equiv"]}`;
+          } else if (
+            tag === "link" &&
+            rest.rel?.toLowerCase() === "canonical"
+          ) {
+            key = "canonical";
+          }
+
+          headStore.push({
+            type: tag as any,
+            key,
+            content: `<${tag}${attrs} />`,
+          });
+
+          return raw(""); // Render nothing in body
+        }
+      }
+
       const attrs = Object.entries(rest)
         .map(([key, value]) => {
           if (value === null || value === undefined || value === false)
             return "";
           if (key === "className") key = "class";
           if (key === "style") value = renderStyle(value);
+
+          // 🛡️ SECURITY FIX: Prevent javascript: XSS
+          if (
+            (key === "href" || key === "src") &&
+            typeof value === "string" &&
+            value.trim().toLowerCase().startsWith("javascript:")
+          ) {
+            value = "";
+          }
+
           if (value === true) return ` ${key}`;
           return ` ${key}="${escapeHtml(String(value))}"`;
         })
@@ -459,16 +458,13 @@ export function render(node: any): SafeString | Promise<SafeString> {
         return raw(`<${tag}${attrs} />`);
       }
 
-      // Handle dangerouslySetInnerHTML
       if (dangerouslySetInnerHTML?.__html) {
         return raw(
           `<${tag}${attrs}>${dangerouslySetInnerHTML.__html}</${tag}>`,
         );
       }
 
-      // children can be array or single
       const childrenList = Array.isArray(children) ? children : [children];
-
       const renderedChildrenResult = render(childrenList);
 
       if (renderedChildrenResult instanceof Promise) {
@@ -482,7 +478,6 @@ export function render(node: any): SafeString | Promise<SafeString> {
     }
   }
 
-  // Fallback
   return raw(escapeHtml(String(node)));
 }
 
@@ -532,113 +527,71 @@ function renderStyle(style: Record<string, string | number>): string {
     .join(";");
 }
 
-function processMetadata(html: string): string {
-  const metaTags: { tag: string; content: string; key?: string }[] = [];
-  const linkTags: { tag: string; content: string; key?: string }[] = [];
-  let titleTag: string | null = null;
-
-  const extractedHtml = html.replace(
-    /<title(?:\s[^>]*)?>([\s\S]*?)<\/title>|<meta(?:\s[^>]*)?\/?>|<link(?:\s[^>]*)?\/?>/gi,
-    (match) => {
-      if (match.toLowerCase().startsWith("<title")) {
-        titleTag = match;
-        return "";
-      }
-      if (match.toLowerCase().startsWith("<meta")) {
-        const name = match.match(/name=["']([^"']+)["']/i);
-        const property = match.match(/property=["']([^"']+)["']/i);
-        const charset = match.match(/charset=["']([^"']+)["']/i);
-        const httpEquiv = match.match(/http-equiv=["']([^"']+)["']/i);
-
-        let key: string | undefined;
-        if (name?.[1]) key = `name:${name[1]}`;
-        else if (property?.[1]) key = `property:${property[1]}`;
-        else if (charset?.[1]) key = "charset";
-        else if (httpEquiv?.[1]) key = `http-equiv:${httpEquiv[1]}`;
-
-        metaTags.push({ tag: "meta", content: match, key });
-        return "";
-      }
-      if (match.toLowerCase().startsWith("<link")) {
-        const rel = match.match(/rel=["']([^"']+)["']/i);
-        const key =
-          rel?.[1]?.toLowerCase() === "canonical" ? "canonical" : undefined;
-        linkTags.push({ tag: "link", content: match, key });
-        return "";
-      }
-      return match;
-    },
-  );
+/**
+ * Replaces the old regex-based extraction with a safer injection-only approach.
+ * Consumes the collected HeadElements.
+ */
+function injectMetadata(html: string, tags: HeadElement[]): string {
+  if (tags.length === 0) return html;
 
   const headContent: string[] = [];
   const metaMap = new Map<string, string>();
+  let titleString: string | null = null;
 
-  // Last wins
-  metaTags.forEach((m) => {
-    if (m.key) metaMap.set(m.key, m.content);
-  });
+  // Process gathered tags
+  // Priority: Last write wins for unique keys
+  for (const t of tags) {
+    if (t.type === "title") {
+      titleString = t.content;
+    } else if (t.key) {
+      metaMap.set(t.key, t.content);
+    } else {
+      headContent.push(t.content);
+    }
+  }
 
-  // Priority Order
+  // Construct Final Head Block
+  const finalHead: string[] = [];
+
+  // 1. Charset
   if (metaMap.has("charset")) {
-    const charsetTag = metaMap.get("charset");
-    if (charsetTag) headContent.push(charsetTag);
+    // biome-ignore lint/style/noNonNullAssertion: <>
+    finalHead.push(metaMap.get("charset")!);
     metaMap.delete("charset");
   }
-  if (titleTag) headContent.push(titleTag);
+
+  // 2. Title
+  if (titleString) {
+    finalHead.push(titleString);
+  }
+
+  // 3. Viewport
   if (metaMap.has("name:viewport")) {
-    const viewportTag = metaMap.get("name:viewport");
-    if (viewportTag) headContent.push(viewportTag);
+    // biome-ignore lint/style/noNonNullAssertion: <>
+    finalHead.push(metaMap.get("name:viewport")!);
     metaMap.delete("name:viewport");
   }
-  metaMap.forEach((v) => {
-    headContent.push(v);
-  });
-  metaTags
-    .filter((m) => !m.key)
-    .forEach((m) => {
-      headContent.push(m.content);
-    });
 
-  const linkMap = new Map<string, string>();
-  linkTags.forEach((l) => {
-    if (l.key) linkMap.set(l.key, l.content);
-    else headContent.push(l.content);
-  });
-  linkMap.forEach((v) => {
-    headContent.push(v);
-  });
+  // 4. Everything else
+  // biome-ignore lint/suspicious/useIterableCallbackReturn: <>
+  metaMap.forEach((v) => finalHead.push(v));
+  finalHead.push(...headContent);
 
-  const headString = headContent.join("");
+  const headString = finalHead.join("");
 
-  if (extractedHtml.includes("<head>")) {
-    return extractedHtml.replace("<head>", `<head>${headString}`);
+  // Simple Injection (No complex regex)
+  if (html.includes("<head>")) {
+    return html.replace("<head>", `<head>${headString}`);
   }
-  if (extractedHtml.match(/<html/i)) {
-    return extractedHtml.replace(
-      /(<html[^>]*>)/i,
-      `$1<head>${headString}</head>`,
-    );
+  if (html.toLowerCase().includes("<html")) {
+    // Basic regex just to find the opening html tag, strictly matching <html... >
+    return html.replace(/(<html[^>]*>)/i, `$1<head>${headString}</head>`);
   }
 
-  if (headContent.length > 0) {
-    return `<head>${headString}</head>${extractedHtml}`;
-  }
-
-  return extractedHtml;
+  // Fallback: Prepend
+  return `<head>${headString}</head>${html}`;
 }
 
-/**
- * Creates a raw HTML string that will not be escaped when rendered.
- * Equivalent to using `new SafeString(str)`.
- *
- * @param str - The raw HTML string.
- * @returns A SafeString instance.
- *
- * @example
- * ```tsx
- * <div>{raw("<span>Raw HTML</span>")}</div>
- * ```
- */
 export function raw(str: string): SafeString {
   return new SafeString(str);
 }

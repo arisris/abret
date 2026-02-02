@@ -150,21 +150,21 @@ describe("html Helper & Metadata System", () => {
   });
 
   test("auto-injects head into html", async () => {
-    const input = `<html><body><h1>Hi</h1><title>Auto</title></body></html>`;
-    const res = html(new SafeString(input));
+    // ⚠️ Updated for New Architecture:
+    // Raw strings are opaque. We must use the template literal to trigger parsing
+    // so that <title> acts as a Component/VNode and gets hoisted.
+    const res = html`<html><body><h1>Hi</h1><title>Auto</title></body></html>`;
     const text = await res.text();
     expect(text).toContain("<head>");
     expect(text).toContain("<title>Auto</title>");
-    expect(text).not.toContain("<body><title>"); // Should be moved/removed from body logically?
-    // Wait, my regex implementation actually just COPY extracts and injects into head,
-    // it doesn't REMOVE them from original location unless I update it to do so?
-    // Looking at the code: `extractedHtml` is `html.replace(...)` where it returns `""` for matches.
-    // Yes, it removes them from the original string!
+    // Logic change: In the new system, we render nothing in place for title,
+    // effectively "removing" it from body and moving to head.
+    expect(text).not.toContain("<body><title>"); 
     expect(text).not.toContain("<h1>Hi</h1><title>");
   });
 
   test("overrides title (last wins)", async () => {
-    const input = `
+    const res = html`
       <html>
         <head><title>Old</title></head>
         <body>
@@ -173,14 +173,13 @@ describe("html Helper & Metadata System", () => {
         </body>
       </html>
     `;
-    const res = html(new SafeString(input));
     const text = await res.text();
     expect(text).toContain("<title>New</title>");
     expect(text).not.toContain("<title>Old</title>");
   });
 
   test("overrides meta tags by name", async () => {
-    const input = `
+    const res = html`
       <html>
         <head>
           <meta name="description" content="Old Desc" />
@@ -190,28 +189,26 @@ describe("html Helper & Metadata System", () => {
         </body>
       </html>
     `;
-    const res = html(new SafeString(input));
     const text = await res.text();
     expect(text).toContain('<meta name="description" content="New Desc" />');
     expect(text).not.toContain("Old Desc");
   });
 
   test("prioritizes charset and moves to top", async () => {
-    const input = `
+    const res = html`
       <html>
         <body>
           <meta charset="utf-8" />
         </body>
       </html>
     `;
-    const res = html(new SafeString(input));
     const text = await res.text();
     // It should be inside head
     expect(text).toMatch(/<head>\s*<meta charset="utf-8" \/>/);
   });
 
   test("handles duplicate property meta tags (OG tags)", async () => {
-    const input = `
+    const res = html`
       <html>
         <head>
           <meta property="og:title" content="Old OG" />
@@ -221,15 +218,14 @@ describe("html Helper & Metadata System", () => {
         </body>
       </html>
     `;
-    const res = html(new SafeString(input));
     const text = await res.text();
     expect(text).toContain('<meta property="og:title" content="New OG" />');
     expect(text).not.toContain("Old OG");
   });
 
   test("preserves non-conflicting links and scripts", async () => {
-    // Note: scripts are not touched by the regex currently, only link/meta/title
-    const input = `
+    // scripts are not touched, link IS touched if parsed
+    const res = html`
       <html>
         <head>
           <link rel="stylesheet" href="style.css" />
@@ -239,28 +235,25 @@ describe("html Helper & Metadata System", () => {
         </body>
       </html>
     `;
-    const res = html(new SafeString(input));
     const text = await res.text();
     expect(text).toContain('href="style.css"');
     expect(text).toContain('href="style2.css"');
   });
 
   test("overrides canonical link", async () => {
-    const input = `
+    const res = html`
       <html>
         <head> <link rel="canonical" href="old.com" /> </head>
         <body> <link rel="canonical" href="new.com" /> </body>
       </html>
     `;
-    const res = html(new SafeString(input));
     const text = await res.text();
     expect(text).toContain('href="new.com"');
     expect(text).not.toContain('href="old.com"');
   });
 
   test("injects head properly when missing", async () => {
-    const input = `<div>No HTML tag</div><title>Generated</title>`;
-    const res = html(new SafeString(input));
+    const res = html`<div>No HTML tag</div><title>Generated</title>`;
     const text = await res.text();
     expect(text).toBe(
       `<head><title>Generated</title></head><div>No HTML tag</div>`,

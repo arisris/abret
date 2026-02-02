@@ -243,6 +243,7 @@ const routes = mergeRoutes(
       prewarm: ["preact", "@preact/signals"],
       minify: true,
       localMaxAge: 3600,
+      // cdnFallback: true,
     }),
   ),
   createRoute("/*", (req) => {

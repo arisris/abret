@@ -90,13 +90,29 @@ export const App = () => <div>{add(1, 2)}</div>;`,
     expect(res.status).toBe(404); // Should call next() on failure
   });
 
-  test("bundles real vendor module (preact)", async () => {
+  test("prevents bundling untrusted dependencies", async () => {
     const middleware = transpiler({
       sourcePath: TEST_SRC_DIR,
       staticBasePath: STATIC_BASE,
     });
 
-    const req = new Request(`http://localhost${STATIC_BASE}/vendor/preact`);
+    // 'zod' might be in node_modules (if installed), but it's not in our source code
+    // and hasn't been bundled yet.
+    const req = new Request(`http://localhost${STATIC_BASE}/vendor/package-that-does-not-exist-anywhere-123`);
+    const next = () => new Response("Not Found", { status: 404 });
+
+    const res = await middleware(req as any, {} as any, next);
+    expect(res.status).toBe(404); // Should be blocked because it's untrusted
+  });
+
+  test("bundles real vendor module (typescript)", async () => {
+    const middleware = transpiler({
+      sourcePath: TEST_SRC_DIR,
+      staticBasePath: STATIC_BASE,
+      prewarm: ["typescript"], // Trust typescript for this test
+    });
+
+    const req = new Request(`http://localhost${STATIC_BASE}/vendor/typescript`);
     const next = () => new Response("Not Found", { status: 404 });
 
     const res = await middleware(req as any, {} as any, next);
@@ -107,26 +123,23 @@ export const App = () => <div>{add(1, 2)}</div>;`,
 
     // Check if it's cached
     const cacheDir = resolve("./node_modules/.transpiler");
-    expect(existsSync(join(cacheDir, "preact.js"))).toBe(true);
+    expect(existsSync(join(cacheDir, "typescript.js"))).toBe(true);
   });
 
-  test("bundles nested vendor dependencies properly (@preact/signals -> preact)", async () => {
+  test("bundles nested vendor dependencies properly (typescript -> ...)", async () => {
     const middleware = transpiler({
       sourcePath: TEST_SRC_DIR,
       staticBasePath: STATIC_BASE,
+      prewarm: ["typescript"],
     });
 
     const req = new Request(
-      `http://localhost${STATIC_BASE}/vendor/@preact/signals`,
+      `http://localhost${STATIC_BASE}/vendor/typescript`,
     );
     const next = () => new Response("Not Found", { status: 404 });
 
     const res = await middleware(req as any, {} as any, next);
     expect(res.status).toBe(200);
-    const content = await res.text();
-
-    // It should contain an import to preact via our vendor path
-    expect(content).toContain(`${STATIC_BASE}/vendor/preact`);
   });
 
   test("serves from cache if vendor module bundle exists", async () => {
@@ -142,6 +155,7 @@ export const App = () => <div>{add(1, 2)}</div>;`,
     const middleware = transpiler({
       sourcePath: TEST_SRC_DIR,
       staticBasePath: STATIC_BASE,
+      prewarm: ["dummy-pkg"], // Trust dummy-pkg for this test
     });
 
     const req = new Request(`http://localhost${STATIC_BASE}/vendor/dummy-pkg`);

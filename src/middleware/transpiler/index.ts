@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { BunPlugin } from "bun";
 import { createMiddleware } from "../..";
@@ -43,6 +43,7 @@ export const transpiler = (options: TranspilerOptions) => {
     cdnFallback = false,
     plugins = [],
   } = options;
+
   const cacheDir = path.resolve(process.cwd(), "node_modules", ".transpiler");
 
   // Normalize base paths to ensure safe matching
@@ -66,11 +67,63 @@ export const transpiler = (options: TranspilerOptions) => {
 
   const defaultDefine = {
     "process.env.NODE_ENV": JSON.stringify(
-      process.env.NODE_ENV || "development"
+      process.env.NODE_ENV || "development",
     ),
     ...publicEnv,
     ...define,
   };
+
+  /**
+   * Track trusted dependencies to prevent unauthorized bundling.
+   * A dependency is trusted if:
+   * 1. It is in the 'prewarm' list.
+   * 2. It is a key in 'globals'.
+   * 3. It is discovered in source code during scan or transpilation.
+   * 4. It is a dependency of another trusted module (discovered during resolution).
+   */
+  const trustedDependencies = new Set<string>([
+    ...(prewarm || []),
+    ...Object.keys(globals),
+  ]);
+
+  function registerTrustedDependency(moduleName: string) {
+    if (!moduleName) return;
+    const normalizedName = moduleName.trim();
+    if (normalizedName && !trustedDependencies.has(normalizedName)) {
+      trustedDependencies.add(normalizedName);
+    }
+  }
+
+  // Also trust whatever is already in the cache directory
+  if (existsSync(cacheDir)) {
+    const files = new Bun.Glob("*.js").scanSync(cacheDir);
+    for (const file of files) {
+      const moduleName = file.slice(0, -3).replace(/__/g, "/");
+      registerTrustedDependency(moduleName);
+    }
+  }
+
+  // Initial scan of sourcePath to discover initial dependencies
+  const absSourcePath = path.resolve(process.cwd(), sourcePath);
+  if (existsSync(absSourcePath)) {
+    const glob = new Bun.Glob("**/*.{ts,tsx,js,jsx}");
+    const scanner = new Bun.Transpiler({ loader: "tsx" });
+
+    for (const relativePath of glob.scanSync(absSourcePath)) {
+      try {
+        const fullPath = path.join(absSourcePath, relativePath);
+        const contents = readFileSync(fullPath, "utf8");
+        const imports = scanner.scan(contents).imports;
+        for (const imp of imports) {
+          if (!imp.path.startsWith(".") && !imp.path.startsWith("/")) {
+            registerTrustedDependency(imp.path);
+          }
+        }
+      } catch {
+        // Skip files that can't be read or scanned
+      }
+    }
+  }
 
   // Concurrency lock to prevent redundant builds
   const activeBundles = new Map<string, Promise<any>>();
@@ -83,7 +136,8 @@ export const transpiler = (options: TranspilerOptions) => {
 
     try {
       Bun.resolveSync(moduleName, process.cwd());
-      // Found locally
+      // Found locally, add to trusted list
+      registerTrustedDependency(moduleName);
       return `${basePrefix}${vendorPath.replace(/^\/|\/$/g, "")}/${moduleName}`;
     } catch {
       // Not found locally
@@ -152,12 +206,17 @@ export const transpiler = (options: TranspilerOptions) => {
             globalsPlugin,
             {
               name: "abret-external-vendor",
-              setup(build) {
-                build.onResolve({ filter: /^[^./]/ }, (args) => {
+              setup(build: any) {
+                build.onResolve({ filter: /^[^./]/ }, (args: any) => {
                   // Don't externalize the entry point or globals
                   if (args.path === moduleName || globals[args.path])
                     return null;
-                  return { path: args.path, external: true };
+
+                  // 🛡️ REFACTOR: Rewrite to vendor path (AST-based)
+                  if (/^(https?:|(?:\/\/))/.test(args.path)) {
+                    return { path: args.path, external: true };
+                  }
+                  return { path: resolveModulePath(args.path), external: true };
                 });
               },
             },
@@ -178,22 +237,14 @@ export const transpiler = (options: TranspilerOptions) => {
 
         const rawContent = await output.text();
 
-        // Rewrite imports inside the vendor bundle
-        const content = rawContent.replace(
-          /((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g,
-          (match, prefix, path, suffix) => {
-            if (/^(https?:|(?:\/\/))/.test(path)) return match;
-            if (!path.startsWith(".") && !path.startsWith("/")) {
-              return `${prefix}${resolveModulePath(path)}${suffix}`;
-            }
-            return match;
-          }
-        );
+        // Imports already rewritten by 'abret-external-vendor' plugin
+        const content = rawContent;
 
         await Bun.write(cachedFile, content);
         console.log(`[Abret] Pre-bundled: ${moduleName}`);
       } catch (err) {
         console.error(`[Abret] Error bundling ${moduleName}:`, err);
+        throw err; // Re-throw so handler can catch it
       } finally {
         activeBundles.delete(cacheKey);
       }
@@ -222,6 +273,14 @@ export const transpiler = (options: TranspilerOptions) => {
     // --- 1. HANDLE VENDOR MODULES (e.g., /_modules/vendor/preact) ---
     if (pathname.startsWith(vendorPrefix)) {
       const moduleName = pathname.slice(vendorPrefix.length);
+
+      // Security Check: Only allow if it's a trusted dependency
+      // Note: If cdnFallback is true, we allow anything because it will eventually
+      // point to esm.sh if not found locally.
+      if (!cdnFallback && !trustedDependencies.has(moduleName)) {
+        return next();
+      }
+
       const cacheKey = moduleName.replace(/\//g, "__");
       const cachedFile = path.join(cacheDir, `${cacheKey}.js`);
 
@@ -236,7 +295,13 @@ export const transpiler = (options: TranspilerOptions) => {
       }
 
       // If not in cache, bundle on-demand
-      await bundleVendorModule(moduleName);
+      try {
+        await bundleVendorModule(moduleName);
+      } catch (_err) {
+        if (cdnFallback) {
+          return Response.redirect(`https://esm.sh/${moduleName}`, 302);
+        }
+      }
 
       if (existsSync(cachedFile)) {
         return new Response(Bun.file(cachedFile), {
@@ -254,13 +319,33 @@ export const transpiler = (options: TranspilerOptions) => {
     const internalPath = pathname.slice(basePrefix.length);
 
     // --- 2. HANDLE LOCAL SOURCE FILES (e.g., /app.js -> src/app.ts, /style.css -> src/style.css) ---
+    // PATCHED: Security Fix for Path Traversal
     const extname = path.extname(internalPath);
     let sourceFile = "";
     let contentType = "application/javascript";
 
+    /**
+     * Helper to safely resolve paths and ensure they stay within absSourcePath
+     */
+    const secureResolve = (relativePath: string): string | null => {
+      // Clean leading slash for safe join
+      const cleanRelative = relativePath.startsWith("/")
+        ? relativePath.slice(1)
+        : relativePath;
+
+      const resolvedPath = path.join(absSourcePath, cleanRelative);
+
+      // 🛡️ SECURITY CHECK (Jail):
+      // Ensure the resolved path actually starts with our allowed source directory.
+      if (!resolvedPath.startsWith(absSourcePath)) {
+        return null;
+      }
+      return resolvedPath;
+    };
+
     if (extname === ".css") {
-      const p = path.join(path.resolve(sourcePath), internalPath);
-      if (existsSync(p)) {
+      const p = secureResolve(internalPath);
+      if (p && existsSync(p)) {
         sourceFile = p;
         contentType = "text/css";
       }
@@ -271,13 +356,8 @@ export const transpiler = (options: TranspilerOptions) => {
 
       const possibleExtensions = [".tsx", ".ts", ".jsx", ".js"];
       for (const ext of possibleExtensions) {
-        const p = path.join(
-          path.resolve(sourcePath),
-          (baseFileName.startsWith("/")
-            ? baseFileName.slice(1)
-            : baseFileName) + ext,
-        );
-        if (existsSync(p)) {
+        const p = secureResolve(baseFileName + ext);
+        if (p && existsSync(p)) {
           sourceFile = p;
           break;
         }
@@ -327,7 +407,7 @@ export const transpiler = (options: TranspilerOptions) => {
                       () => ({
                         path: moduleName,
                         namespace: "abret-globals",
-                      })
+                      }),
                     );
                   }
                   build.onLoad(
@@ -338,7 +418,7 @@ export const transpiler = (options: TranspilerOptions) => {
                         contents: `export default globalThis.${gName};`,
                         loader: "js",
                       };
-                    }
+                    },
                   );
                 },
               },
@@ -348,7 +428,7 @@ export const transpiler = (options: TranspilerOptions) => {
 
           if (!buildResult.success || buildResult.outputs.length === 0) {
             throw new Error(
-              `Build failed: ${buildResult.logs.map((l) => l.message).join(", ")}`
+              `Build failed: ${buildResult.logs.map((l) => l.message).join(", ")}`,
             );
           }
 
@@ -361,20 +441,33 @@ export const transpiler = (options: TranspilerOptions) => {
             return { content: transpiledCode, contentType };
           }
 
-          // --- IMPORT REWRITING LOGIC (JS only) ---
+          // --- ROBUST IMPORT REWRITING ---
+          // Using a unified regex to match Strings/Comments AND Imports.
+          // This allows us to ignore matches that occur inside strings or comments.
+          const tokenRegex = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\/[^\n]*|\/\*[\s\S]*?\*\/)|((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g;
+
           const finalCode = transpiledCode.replace(
-            /((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g,
-            (match, prefix, path, suffix) => {
+            tokenRegex,
+            (match, stringOrComment, prefix, path, suffix) => {
+              // 1. If it matched a string or comment, return it unchanged.
+              if (stringOrComment) {
+                return match;
+              }
+
+              // 2. Otherwise, it's a real import. Rewrite the path.
               if (/^(https?:|(?:\/\/))/.test(path)) return match;
+              
               if (!path.startsWith(".") && !path.startsWith("/")) {
                 return `${prefix}${resolveModulePath(path)}${suffix}`;
               }
+              
               if (
                 path.startsWith(".") &&
                 !path.split("/").pop()?.includes(".")
               ) {
                 return `${prefix}${path}.js${suffix}`;
               }
+              
               return match;
             }
           );
@@ -385,25 +478,24 @@ export const transpiler = (options: TranspilerOptions) => {
         }
       })();
 
-    activeBundles.set(lockKey, buildPromise);
-    try {
-      const finalResult = await buildPromise;
+      activeBundles.set(lockKey, buildPromise);
+      try {
+        const finalResult = await buildPromise;
+        return new Response(finalResult.content, {
+          headers: {
+            "Content-Type": finalResult.contentType,
+            ETag: fastEtag,
+            "Cache-Control":
+              localMaxAge > 0 ? `public, max-age=${localMaxAge}` : "no-cache",
+          },
+        });
+      } catch (err: any) {
+        const errorMessage = err.message || "Unknown transpilation error";
+        console.error(`[Abret] ${errorMessage} for ${sourceFile}`);
 
-      return new Response(finalResult.content, {
-        headers: {
-          "Content-Type": finalResult.contentType,
-          ETag: fastEtag,
-          "Cache-Control":
-            localMaxAge > 0 ? `public, max-age=${localMaxAge}` : "no-cache",
-        },
-      });
-    } catch (err: any) {
-      const errorMessage = err.message || "Unknown transpilation error";
-      console.error(`[Abret] ${errorMessage} for ${sourceFile}`);
-
-      // Return browser-friendly error overlay/logger
-      return new Response(
-        `console.error("[Abret] Build Error in ${sourceFile}:", ${JSON.stringify(errorMessage)});
+        // Return browser-friendly error overlay/logger
+        return new Response(
+          `console.error("[Abret] Build Error in ${sourceFile}:", ${JSON.stringify(errorMessage)});
         if (typeof document !== 'undefined') {
           const div = document.createElement('div');
           div.style.position = 'fixed';
@@ -419,10 +511,10 @@ export const transpiler = (options: TranspilerOptions) => {
           div.innerText = "[Abret] Build Error in ${sourceFile.split("/").pop()}: " + ${JSON.stringify(errorMessage)};
           document.body.appendChild(div);
         }`,
-        { headers: { "Content-Type": "application/javascript" } }
-      );
+          { headers: { "Content-Type": "application/javascript" } },
+        );
+      }
     }
-  }
 
     return next();
   });
