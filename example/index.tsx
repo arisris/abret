@@ -11,6 +11,8 @@ import { createContext, setContext, useContext } from "abret/store";
 
 // Abret uses exact path matching. You can manually handle trailing slashes using catch-all routes.
 
+import { transpiler } from "../src/middleware/transpiler";
+
 // ============================================================================
 // 1. Setup Context & Middleware
 // ============================================================================
@@ -61,7 +63,7 @@ const auth = createMiddleware((req, _server, next) => {
 
 const ThemeContext = createContext("Theme", "light");
 
-function Layout(props: { title: string; children: any }) {
+function Layout(props: { title: string; children: any; scripts?: boolean }) {
   // We can use context here if we wrapped it in a provider
   const theme = useContext(ThemeContext);
 
@@ -90,6 +92,7 @@ function Layout(props: { title: string; children: any }) {
         <nav>
           <a href="/">Home</a>
           <a href="/about">About</a>
+          <a href="/interactive">Interactive</a>
           <a href="/api/me">API (Me)</a>
           <a href="/?user=Admin">Login as Admin</a>
           {user ? (
@@ -104,6 +107,9 @@ function Layout(props: { title: string; children: any }) {
             Powered by Abret & Bun
           </p>
         </footer>
+        {props.scripts && (
+          <script type="module" src="/_modules/main.js"></script>
+        )}
       </body>
     </html>
   );
@@ -160,6 +166,26 @@ const home = createRoute(
   appMiddleware,
 );
 
+// -- Interactive Route (demonstrates transpiler) --
+const interactive = createRoute(
+  "/interactive",
+  () => {
+    return html(
+      <Layout title="Interactive" scripts>
+        <h1>Interactive Page</h1>
+        <p>
+          This page loads a client-side Preact component via the Abret
+          Transpiler.
+        </p>
+        <div id="root">
+          <p>Loading interactive counter...</p>
+        </div>
+      </Layout>,
+    ).doctype();
+  },
+  appMiddleware,
+);
+
 // -- About Route --
 const about = createRoute(
   "/about",
@@ -175,6 +201,7 @@ const about = createRoute(
           <li>Routes: Native Bun Routes</li>
           <li>JSX: Custom runtime, no React needed</li>
           <li>Middleware: Functional & Composable</li>
+          <li><b>Transpiler</b>: On-the-fly TS/TSX & Vendor bundling</li>
         </ul>
       <//>
     `.doctype();
@@ -194,7 +221,7 @@ const apiRoutes = mergeRoutes(
   api("/echo/:word", (req) => {
     return Response.json({
       word: req.params.word,
-      length: req.params.word.length,
+      length: req.params.word?.length,
     });
   }),
 );
@@ -206,7 +233,18 @@ const apiRoutes = mergeRoutes(
 const routes = mergeRoutes(
   home,
   about,
+  interactive,
   apiRoutes,
+  // 5. Add Transpiler Middleware for /_modules/*
+  createRoute(
+    "/_modules/*",
+    () => new Response("Not Found", { status: 404 }),
+    transpiler({
+      sourcePath: "./src",
+      staticBasePath: "/_modules",
+      prewarm: ["preact", "@preact/signals"],
+    }),
+  ),
   createRoute("/*", (req) => {
     // handle trailing slash
     if (req.url.endsWith("/")) {
