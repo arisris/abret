@@ -1,6 +1,6 @@
 {
   "name": "abret",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Fast, type-safe web framework for Bun with built-in JSX and middleware support.",
   "license": "MIT",
   "author": "Arisris",

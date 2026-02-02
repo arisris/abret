@@ -270,7 +270,10 @@ export const createRouteGroup = <Prefix extends `/${string}`, S = undefined>(
   prefix: Prefix,
   middlewares: Middleware<string, S>[] = [],
 ) => {
-  return <P extends `/${string}` | "">(path: P, value: RouteValue<string, S>) => {
+  return <P extends `/${string}` | "">(
+    path: P,
+    value: RouteValue<string, S>,
+  ) => {
     // Combine with slashes and replace multiple slashes with a single one
     // This also guarantees a leading slash
     let fullPath = `/${prefix}/${path}`.replace(/\/+/g, "/");

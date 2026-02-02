@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createMiddleware,
-  createRouteGroup,
-  mergeRoutes,
-} from "../src";
+import { createMiddleware, createRouteGroup, mergeRoutes } from "../src";
 
 describe("createRouteGroup", () => {
   test("creates routes with prefix", () => {
@@ -31,9 +27,9 @@ describe("createRouteGroup", () => {
       req: any,
       server: any,
     ) => Response | Promise<Response>;
-    
+
     await handler({} as any, {} as any);
-    
+
     expect(order).toEqual(["middleware", "handler"]);
   });
 
@@ -87,7 +83,7 @@ describe("createRouteGroup", () => {
 
     expect(route["/api/users"]).toHaveProperty("GET");
     expect(route["/api/users"]).toHaveProperty("POST");
-    
+
     const handlers = route["/api/users"] as any;
     const getRes = await handlers.GET({} as any, {} as any);
     expect(await getRes.text()).toBe("GET users");
@@ -109,7 +105,7 @@ describe("createRouteGroup", () => {
     // Nested / root style
     const g4 = createRouteGroup("/api");
     expect(g4("/", () => new Response())).toHaveProperty("/api");
-    
+
     // Multiple slashes
     const g5 = createRouteGroup("//api//");
     expect(g5("//users//", () => new Response())).toHaveProperty("/api/users");
@@ -119,22 +115,24 @@ describe("createRouteGroup", () => {
     expect(rootGroup("/", () => new Response())).toHaveProperty("/");
     expect(rootGroup("", () => new Response())).toHaveProperty("/");
 
-    // No leading slash in prefix (Note: In real usage this would be a TS error, 
-    // but here we can cast to test the runtime normalization if needed, 
+    // No leading slash in prefix (Note: In real usage this would be a TS error,
+    // but here we can cast to test the runtime normalization if needed,
     // or just fix the test to match the type rule)
     const noLeadingGroup = createRouteGroup("/api" as any);
-    expect(noLeadingGroup("/users", () => new Response())).toHaveProperty("/api/users");
+    expect(noLeadingGroup("/users", () => new Response())).toHaveProperty(
+      "/api/users",
+    );
 
     // Merging overlapping normalized routes
     const merged = mergeRoutes(
       rootGroup("/", () => new Response("last-win-secondary")),
       rootGroup("", () => new Response("last-win-primary")),
     );
-    
+
     // Only one "/" key should exist
     expect(Object.keys(merged)).toHaveLength(1);
     expect(merged).toHaveProperty("/");
-    
+
     // The last one should win (Object.assign behavior)
     const handler = merged["/"] as any;
     const res = await handler({} as any, {} as any);

@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
+import type { BunPlugin } from "bun";
 import { createMiddleware } from "../..";
 
 interface TranspilerOptions {
@@ -11,16 +12,23 @@ interface TranspilerOptions {
   vendorPath?: string;
   /** Optional list of modules to bundle on startup */
   prewarm?: string[];
+  /** Minify local modules. Defaults to false (recommended for dev) */
+  minify?: boolean;
+  /** Browser cache TTL for local modules in seconds. Defaults to 0 */
+  localMaxAge?: number;
+  /** Global identifier replacements */
+  define?: Record<string, string>;
+  /** Map modules to global variables (e.g., { 'react': 'React' }) */
+  globals?: Record<string, string>;
+  /** Automatically fallback to esm.sh if package is not found locally */
+  cdnFallback?: boolean;
+  /** Additional Bun plugins */
+  plugins?: any[];
 }
 
 /**
  * Transpiler middleware that handles on-the-fly TS/TSX transpilation
  * and automatic npm module bundling (vendor modules).
- *
- * Usage:
- * ```ts
- * transpiler({ sourcePath: "./src", staticBasePath: "/_modules" })
- * ```
  */
 export const transpiler = (options: TranspilerOptions) => {
   const {
@@ -28,6 +36,12 @@ export const transpiler = (options: TranspilerOptions) => {
     staticBasePath,
     vendorPath = "vendor",
     prewarm = [],
+    minify = false,
+    localMaxAge = 0,
+    define = {},
+    globals = {},
+    cdnFallback = false,
+    plugins = [],
   } = options;
   const cacheDir = path.resolve(process.cwd(), "node_modules", ".transpiler");
 
@@ -42,6 +56,45 @@ export const transpiler = (options: TranspilerOptions) => {
     mkdirSync(cacheDir, { recursive: true });
   }
 
+  // Collect PUBLIC_ environment variables for exposure
+  const publicEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("PUBLIC_")) {
+      publicEnv[`process.env.${key}`] = JSON.stringify(value);
+    }
+  }
+
+  const defaultDefine = {
+    "process.env.NODE_ENV": JSON.stringify(
+      process.env.NODE_ENV || "development"
+    ),
+    ...publicEnv,
+    ...define,
+  };
+
+  // Concurrency lock to prevent redundant builds
+  const activeBundles = new Map<string, Promise<any>>();
+
+  /**
+   * Helper to resolve module path to either local vendor path or CDN
+   */
+  function resolveModulePath(moduleName: string): string {
+    if (globals[moduleName]) return moduleName; // Handled by globals plugin
+
+    try {
+      Bun.resolveSync(moduleName, process.cwd());
+      // Found locally
+      return `${basePrefix}${vendorPath.replace(/^\/|\/$/g, "")}/${moduleName}`;
+    } catch {
+      // Not found locally
+      if (cdnFallback) {
+        return `https://esm.sh/${moduleName}`;
+      }
+      // Fallback to local path anyway (will 404, but consistent)
+      return `${basePrefix}${vendorPath.replace(/^\/|\/$/g, "")}/${moduleName}`;
+    }
+  }
+
   /**
    * Helper to bundle a vendor module and save to cache
    */
@@ -49,62 +102,105 @@ export const transpiler = (options: TranspilerOptions) => {
     const cacheKey = moduleName.replace(/\//g, "__");
     const cachedFile = path.join(cacheDir, `${cacheKey}.js`);
 
-    // Skip if already cached
     if (existsSync(cachedFile)) return;
 
-    try {
-      const entryPoint = Bun.resolveSync(moduleName, process.cwd());
-      const result = await Bun.build({
-        entrypoints: [entryPoint],
-        target: "browser",
-        format: "esm",
-        minify: true,
-        plugins: [
-          {
-            name: "abret-external-vendor",
-            setup(build) {
-              build.onResolve({ filter: /^[^./]/ }, (args) => {
-                if (args.path === moduleName) return null;
-                return { path: args.path, external: true };
-              });
-            },
-          },
-        ],
-      });
-
-      if (!result.success || result.outputs.length === 0) {
-        console.error(
-          `[Abret] Failed to bundle vendor module: ${moduleName}`,
-          result.logs,
-        );
-        return;
-      }
-
-      const output = result.outputs[0];
-      if (!output) return;
-
-      const rawContent = await output.text();
-
-      // Rewrite imports inside the vendor bundle
-      const content = rawContent.replace(
-        /((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g,
-        (match, prefix, path, suffix) => {
-          if (/^(https?:|(?:\/\/))/.test(path)) return match;
-          if (!path.startsWith(".") && !path.startsWith("/")) {
-            return `${prefix}${basePrefix}${vendorPath.replace(
-              /^\/|\/$/g,
-              "",
-            )}/${path}${suffix}`;
-          }
-          return match;
-        },
-      );
-
-      await Bun.write(cachedFile, content);
-      console.log(`[Abret] Pre-bundled: ${moduleName}`);
-    } catch (err) {
-      console.error(`[Abret] Error bundling ${moduleName}:`, err);
+    // Concurrency lock
+    if (activeBundles.has(cacheKey)) {
+      return activeBundles.get(cacheKey);
     }
+
+    const promise = (async () => {
+      // Re-check existence inside promise
+      if (existsSync(cachedFile)) return;
+
+      try {
+        const entryPoint = Bun.resolveSync(moduleName, process.cwd());
+
+        // Prepare globals plugin for vendor too if needed
+        const globalsPlugin: BunPlugin = {
+          name: "abret-globals",
+          setup(build) {
+            for (const moduleName of Object.keys(globals)) {
+              build.onResolve(
+                { filter: new RegExp(`^${moduleName}$`) },
+                () => ({
+                  path: moduleName,
+                  namespace: "abret-globals",
+                }),
+              );
+            }
+            build.onLoad(
+              { filter: /.*/, namespace: "abret-globals" },
+              (args) => {
+                const gName = globals[args.path];
+                return {
+                  contents: `export default globalThis.${gName}; export const ${gName} = globalThis.${gName};`,
+                  loader: "js",
+                };
+              },
+            );
+          },
+        };
+
+        const result = await Bun.build({
+          entrypoints: [entryPoint],
+          target: "browser",
+          format: "esm",
+          minify: true,
+          define: defaultDefine,
+          plugins: [
+            globalsPlugin,
+            {
+              name: "abret-external-vendor",
+              setup(build) {
+                build.onResolve({ filter: /^[^./]/ }, (args) => {
+                  // Don't externalize the entry point or globals
+                  if (args.path === moduleName || globals[args.path])
+                    return null;
+                  return { path: args.path, external: true };
+                });
+              },
+            },
+            ...plugins,
+          ],
+        });
+
+        if (!result.success || result.outputs.length === 0) {
+          console.error(
+            `[Abret] Failed to bundle vendor module: ${moduleName}`,
+            result.logs,
+          );
+          return;
+        }
+
+        const output = result.outputs[0];
+        if (!output) return;
+
+        const rawContent = await output.text();
+
+        // Rewrite imports inside the vendor bundle
+        const content = rawContent.replace(
+          /((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g,
+          (match, prefix, path, suffix) => {
+            if (/^(https?:|(?:\/\/))/.test(path)) return match;
+            if (!path.startsWith(".") && !path.startsWith("/")) {
+              return `${prefix}${resolveModulePath(path)}${suffix}`;
+            }
+            return match;
+          }
+        );
+
+        await Bun.write(cachedFile, content);
+        console.log(`[Abret] Pre-bundled: ${moduleName}`);
+      } catch (err) {
+        console.error(`[Abret] Error bundling ${moduleName}:`, err);
+      } finally {
+        activeBundles.delete(cacheKey);
+      }
+    })();
+
+    activeBundles.set(cacheKey, promise);
+    return promise;
   }
 
   // Pre-warm cache on startup
@@ -157,85 +253,176 @@ export const transpiler = (options: TranspilerOptions) => {
     // For local files, we need the path relative to staticBasePath
     const internalPath = pathname.slice(basePrefix.length);
 
-    // --- 2. HANDLE LOCAL SOURCE FILES (e.g., /_modules/app.js -> src/app.ts) ---
-    const baseFileName = internalPath.endsWith(".js")
-      ? internalPath.slice(0, -3)
-      : internalPath;
-
-    const possibleExtensions = [".tsx", ".ts", ".jsx", ".js"];
+    // --- 2. HANDLE LOCAL SOURCE FILES (e.g., /app.js -> src/app.ts, /style.css -> src/style.css) ---
+    const extname = path.extname(internalPath);
     let sourceFile = "";
+    let contentType = "application/javascript";
 
-    for (const ext of possibleExtensions) {
-      const p = path.join(
-        path.resolve(sourcePath),
-        (baseFileName.startsWith("/") ? baseFileName.slice(1) : baseFileName) +
-          ext,
-      );
+    if (extname === ".css") {
+      const p = path.join(path.resolve(sourcePath), internalPath);
       if (existsSync(p)) {
         sourceFile = p;
-        break;
+        contentType = "text/css";
+      }
+    } else {
+      const baseFileName = internalPath.endsWith(".js")
+        ? internalPath.slice(0, -3)
+        : internalPath;
+
+      const possibleExtensions = [".tsx", ".ts", ".jsx", ".js"];
+      for (const ext of possibleExtensions) {
+        const p = path.join(
+          path.resolve(sourcePath),
+          (baseFileName.startsWith("/")
+            ? baseFileName.slice(1)
+            : baseFileName) + ext,
+        );
+        if (existsSync(p)) {
+          sourceFile = p;
+          break;
+        }
       }
     }
 
     if (sourceFile) {
-      try {
-        const buildResult = await Bun.build({
-          entrypoints: [sourceFile],
-          target: "browser",
-          format: "esm",
-          external: ["*"], // Don't bundle local imports
-        });
+      const sourceStat = statSync(sourceFile);
+      const fastEtag = `W/"${sourceStat.size}-${sourceStat.mtimeMs}-${minify}"`;
 
-        if (!buildResult.success || buildResult.outputs.length === 0) {
-          console.error(
-            `[Abret] Build error for ${sourceFile}:`,
-            buildResult.logs,
-          );
-          return next();
-        }
-
-        const output = buildResult.outputs[0];
-        if (!output) {
-          console.error(`[Abret] No output files generated for ${sourceFile}`);
-          return next();
-        }
-
-        const transpiledCode = await output.text();
-
-        // --- IMPORT REWRITING LOGIC ---
-        // 1. Rewrite bare specifiers: "preact" -> "/_modules/vendor/preact"
-        // 2. Add extensions to relative imports: "./utils" -> "./utils.js"
-        const finalCode = transpiledCode.replace(
-          /((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g,
-          (match, prefix, path, suffix) => {
-            // Skip absolute URLs (http, https, //)
-            if (/^(https?:|(?:\/\/))/.test(path)) return match;
-
-            // Handle bare specifiers (npm packages)
-            if (!path.startsWith(".") && !path.startsWith("/")) {
-              return `${prefix}${basePrefix}${vendorPath.replace(
-                /^\/|\/$/g,
-                "",
-              )}/${path}${suffix}`;
-            }
-
-            // Handle relative imports without extensions
-            if (path.startsWith(".") && !path.split("/").pop()?.includes(".")) {
-              return `${prefix}${path}.js${suffix}`;
-            }
-
-            return match;
-          },
-        );
-
-        return new Response(finalCode, {
-          headers: { "Content-Type": "application/javascript" },
-        });
-      } catch (err) {
-        console.error(`[Abret] Transpilation error for ${sourceFile}:`, err);
-        return next();
+      // Fast-path: Skip build if ETag matches
+      if (req.headers.get("if-none-match") === fastEtag) {
+        return new Response(null, { status: 304 });
       }
+
+      // Concurrency lock for local file
+      const lockKey = `local:${sourceFile}:${fastEtag}`;
+      if (activeBundles.has(lockKey)) {
+        const result = await activeBundles.get(lockKey);
+        return new Response(result.content, {
+          headers: {
+            "Content-Type": result.contentType,
+            ETag: fastEtag,
+            "Cache-Control":
+              localMaxAge > 0 ? `public, max-age=${localMaxAge}` : "no-cache",
+          },
+        });
+      }
+
+      const buildPromise = (async () => {
+        try {
+          const buildResult = await Bun.build({
+            entrypoints: [sourceFile],
+            target: "browser",
+            format: "esm",
+            minify,
+            define: defaultDefine,
+            external: ["*"], // Don't bundle local imports
+            plugins: [
+              // Handle globals in local files
+              {
+                name: "abret-globals-local",
+                setup(build: any) {
+                  for (const moduleName of Object.keys(globals)) {
+                    build.onResolve(
+                      { filter: new RegExp(`^${moduleName}$`) },
+                      () => ({
+                        path: moduleName,
+                        namespace: "abret-globals",
+                      })
+                    );
+                  }
+                  build.onLoad(
+                    { filter: /.*/, namespace: "abret-globals" },
+                    (args: any) => {
+                      const gName = globals[args.path];
+                      return {
+                        contents: `export default globalThis.${gName};`,
+                        loader: "js",
+                      };
+                    }
+                  );
+                },
+              },
+              ...plugins,
+            ],
+          });
+
+          if (!buildResult.success || buildResult.outputs.length === 0) {
+            throw new Error(
+              `Build failed: ${buildResult.logs.map((l) => l.message).join(", ")}`
+            );
+          }
+
+          const output = buildResult.outputs[0];
+          if (!output) throw new Error("No output generated");
+
+          const transpiledCode = await output.text();
+
+          if (contentType === "text/css") {
+            return { content: transpiledCode, contentType };
+          }
+
+          // --- IMPORT REWRITING LOGIC (JS only) ---
+          const finalCode = transpiledCode.replace(
+            /((?:import|export)\s*[\s\S]*?from\s*['"]|import\s*\(['"])([^'"]+)(['"]\)?)/g,
+            (match, prefix, path, suffix) => {
+              if (/^(https?:|(?:\/\/))/.test(path)) return match;
+              if (!path.startsWith(".") && !path.startsWith("/")) {
+                return `${prefix}${resolveModulePath(path)}${suffix}`;
+              }
+              if (
+                path.startsWith(".") &&
+                !path.split("/").pop()?.includes(".")
+              ) {
+                return `${prefix}${path}.js${suffix}`;
+              }
+              return match;
+            }
+          );
+
+          return { content: finalCode, contentType };
+        } finally {
+          activeBundles.delete(lockKey);
+        }
+      })();
+
+    activeBundles.set(lockKey, buildPromise);
+    try {
+      const finalResult = await buildPromise;
+
+      return new Response(finalResult.content, {
+        headers: {
+          "Content-Type": finalResult.contentType,
+          ETag: fastEtag,
+          "Cache-Control":
+            localMaxAge > 0 ? `public, max-age=${localMaxAge}` : "no-cache",
+        },
+      });
+    } catch (err: any) {
+      const errorMessage = err.message || "Unknown transpilation error";
+      console.error(`[Abret] ${errorMessage} for ${sourceFile}`);
+
+      // Return browser-friendly error overlay/logger
+      return new Response(
+        `console.error("[Abret] Build Error in ${sourceFile}:", ${JSON.stringify(errorMessage)});
+        if (typeof document !== 'undefined') {
+          const div = document.createElement('div');
+          div.style.position = 'fixed';
+          div.style.top = '0';
+          div.style.left = '0';
+          div.style.width = '100%';
+          div.style.padding = '1rem';
+          div.style.background = '#fee2e2';
+          div.style.color = '#991b1b';
+          div.style.borderBottom = '1px solid #ef4444';
+          div.style.zIndex = '999999';
+          div.style.fontFamily = 'monospace';
+          div.innerText = "[Abret] Build Error in ${sourceFile.split("/").pop()}: " + ${JSON.stringify(errorMessage)};
+          document.body.appendChild(div);
+        }`,
+        { headers: { "Content-Type": "application/javascript" } }
+      );
     }
+  }
 
     return next();
   });

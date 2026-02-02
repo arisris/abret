@@ -76,14 +76,12 @@ function Layout(props: { title: string; children: any; scripts?: boolean }) {
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{props.title} - Abret Example</title>
+        <link rel="stylesheet" href="/_modules/style.css" />
         <style>
           {`
-            body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; }
             nav { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid #eee; }
             a { margin-right: 1rem; color: #0070f3; text-decoration: none; }
             a:hover { text-decoration: underline; }
-            .card { border: 1px solid #ddd; padding: 1rem; border-radius: 8px; background: #f9f9f9; }
-            .badge { background: #333; color: white; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
             .theme-dark { background: #333; color: white; }
           `}
         </style>
@@ -243,6 +241,8 @@ const routes = mergeRoutes(
       sourcePath: "./src",
       staticBasePath: "/_modules",
       prewarm: ["preact", "@preact/signals"],
+      minify: true,
+      localMaxAge: 3600,
     }),
   ),
   createRoute("/*", (req) => {
